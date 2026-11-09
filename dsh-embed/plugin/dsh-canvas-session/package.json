@@ -1,0 +1,26 @@
+{
+  "name": "dsh-canvas-session",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Bind an embedded canvas panel to one dsh session per canvas (画布库 workspace)",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js"
+  ]
+}

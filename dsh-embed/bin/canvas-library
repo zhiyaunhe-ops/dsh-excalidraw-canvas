@@ -1,0 +1,218 @@
+#!/usr/bin/env python3
+"""Regenerate the Excalidraw library page from drawings/*.excalidraw.
+
+Storage : /var/www/canvas-library/drawings  (symlinked as ~/canvases)
+Output  : /var/www/canvas-library/index.html  (served at /library/, token gated)
+
+Each drawing is a pair: <stem>.excalidraw + <stem>.png (thumbnail).
+"""
+import html
+import json
+import os
+import re
+import time
+from pathlib import Path
+
+ROOT = Path("/var/www/canvas-library")
+DRAW = ROOT / "drawings"
+INDEX = ROOT / "index.html"
+
+TS_RE = re.compile(r"^(?P<name>.+?)-(?P<ts>\d{8}-\d{4})$")
+
+
+def humanize(stem: str) -> str:
+    m = TS_RE.match(stem)
+    return m.group("name") if m else stem
+
+
+def describe(path: Path):
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        els = data.get("elements") or []
+        count = len(els)
+        kinds = sorted({e.get("type", "?") for e in els})
+    except Exception:
+        count, kinds = 0, []
+    return count, kinds
+
+
+def cards():
+    items = []
+    for f in DRAW.glob("*.excalidraw"):
+        stem = f.stem
+        png = DRAW / (stem + ".png")
+        count, kinds = describe(f)
+        items.append(
+            {
+                "stem": stem,
+                "title": humanize(stem),
+                "mtime": f.stat().st_mtime,
+                "count": count,
+                "kinds": kinds,
+                "png": png.name if png.exists() else None,
+                "size": f.stat().st_size,
+            }
+        )
+    items.sort(key=lambda i: i["mtime"], reverse=True)
+    return items
+
+
+def fmt_time(ts: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(ts))
+
+
+def fmt_size(n: int) -> str:
+    return f"{n / 1024:.0f} KB" if n < 1024 * 1024 else f"{n / 1048576:.1f} MB"
+
+
+def render(items):
+    rows = []
+    for it in items:
+        thumb = (
+            f'<img class="thumb" src="drawings/{html.escape(it["png"])}" alt="" loading="lazy">'
+            if it["png"]
+            else '<div class="thumb thumb-empty">无预览<br><span>用 canvas-save 保存可生成</span></div>'
+        )
+        kinds = " · ".join(html.escape(k) for k in it["kinds"][:5])
+        rows.append(
+            f"""
+      <article class="card">
+        <a class="shot" href="drawings/{html.escape(it["png"] or it["stem"] + ".excalidraw")}" target="_blank" rel="noopener">{thumb}</a>
+        <div class="meta">
+          <h2 title="{html.escape(it["stem"])}">{html.escape(it["title"])}</h2>
+          <p class="sub">{fmt_time(it["mtime"])} · {it["count"]} 个元素 · {fmt_size(it["size"])}</p>
+          <p class="kinds">{kinds}</p>
+          <div class="actions">
+            <button class="primary" data-load="drawings/{html.escape(it["stem"])}.excalidraw" data-stem="{html.escape(it["stem"])}">载入画布</button>
+            <a class="ghost" href="drawings/{html.escape(it["stem"])}.excalidraw" download>下载</a>
+            <button class="ghost danger" data-del="{html.escape(it["stem"])}" title="从库里删除">删</button>
+          </div>
+        </div>
+      </article>"""
+        )
+
+    empty = (
+        '<p class="empty">还没有存过的图。在聊天里说「存一下」，或用 <code>canvas-save 名字</code>。</p>'
+        if not items
+        else ""
+    )
+
+    return f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>画布库 · Excalidraw</title>
+<style>
+  :root {{ color-scheme: light dark; --bg:#f6f7f9; --fg:#1b1f24; --muted:#6b7480; --card:#fff;
+           --line:#e3e6ea; --accent:#1971c2; --accent-fg:#fff; }}
+  @media (prefers-color-scheme: dark) {{ :root {{ --bg:#16181c; --fg:#e8eaed; --muted:#98a2ae;
+           --card:#1e2126; --line:#2c3138; --accent:#4dabf7; --accent-fg:#0b0d10; }} }}
+  * {{ box-sizing: border-box; }}
+  body {{ margin:0; background:var(--bg); color:var(--fg);
+          font:15px/1.5 -apple-system,"Segoe UI","PingFang SC","Noto Sans CJK SC",sans-serif; }}
+  header {{ position:sticky; top:0; z-index:5; display:flex; gap:16px; align-items:center;
+            padding:14px 22px; background:var(--bg); border-bottom:1px solid var(--line); }}
+  header h1 {{ font-size:16px; margin:0; letter-spacing:.3px; }}
+  header .spacer {{ flex:1; }}
+  header a {{ color:var(--accent); text-decoration:none; font-size:14px; }}
+  header .sub {{ color:var(--muted); font-size:13px; }}
+  main {{ padding:22px; max-width:1500px; margin:0 auto; }}
+  .grid {{ display:grid; gap:18px; grid-template-columns:repeat(auto-fill, minmax(320px, 1fr)); }}
+  .card {{ background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden;
+           display:flex; flex-direction:column; }}
+  .shot {{ display:block; background:#fff; border-bottom:1px solid var(--line); }}
+  .thumb {{ display:block; width:100%; aspect-ratio:16/10; object-fit:contain; }}
+  .thumb-empty {{ display:flex; flex-direction:column; align-items:center; justify-content:center;
+                  color:var(--muted); font-size:13px; gap:4px; }}
+  .thumb-empty span {{ font-size:11px; opacity:.7; }}
+  .meta {{ padding:12px 14px 14px; display:flex; flex-direction:column; gap:4px; }}
+  .meta h2 {{ font-size:15px; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
+  .sub, .kinds {{ margin:0; color:var(--muted); font-size:12px; }}
+  .kinds {{ opacity:.8; }}
+  .actions {{ display:flex; gap:8px; margin-top:10px; }}
+  button, .actions a {{ font:inherit; font-size:13px; padding:6px 12px; border-radius:8px;
+                        border:1px solid var(--line); background:transparent; color:var(--fg);
+                        cursor:pointer; text-decoration:none; }}
+  button.primary {{ background:var(--accent); color:var(--accent-fg); border-color:transparent; font-weight:600; }}
+  button.primary:disabled {{ opacity:.55; cursor:progress; }}
+  button.danger {{ color:#e03131; margin-left:auto; padding:6px 10px; }}
+  .empty {{ color:var(--muted); text-align:center; padding:60px 10px; }}
+  .toast {{ position:fixed; left:50%; bottom:26px; transform:translate(-50%, 20px); opacity:0;
+            background:#1b1f24; color:#fff; padding:10px 16px; border-radius:10px; font-size:14px;
+            transition:.25s; pointer-events:none; max-width:80vw; }}
+  .toast.show {{ opacity:1; transform:translate(-50%, 0); }}
+  code {{ background:rgba(127,127,127,.14); padding:1px 5px; border-radius:4px; }}
+</style>
+</head>
+<body>
+<header>
+  <h1>画布库</h1>
+  <span class="sub">{len(items)} 张</span>
+  <span class="spacer"></span>
+  <a href="/" target="_blank" rel="noopener">← 当前画布</a>
+</header>
+<main>
+  <div class="grid">{''.join(rows)}</div>
+  {empty}
+</main>
+<div class="toast" id="toast"></div>
+<script>
+const toast = (msg) => {{
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._h); toast._h = setTimeout(() => t.classList.remove('show'), 3200);
+}};
+
+document.querySelectorAll('[data-load]').forEach((btn) => {{
+  btn.addEventListener('click', async () => {{
+    btn.disabled = true;
+    try {{
+      const scene = await (await fetch(btn.dataset.load, {{ cache: 'no-store' }})).json();
+      const res = await fetch('/api/elements/sync', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{ elements: scene.elements || [], timestamp: Date.now() }}),
+      }});
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || res.status);
+      // 同源共享：画布页上的 dsh 小窗据此切到这张画布绑定的 session
+      try {{ localStorage.setItem('dsh-canvas-current', btn.dataset.stem); }} catch (e) {{}}
+      toast(`已载入 ${{out.count}} 个元素，画布页会自动更新`);
+    }} catch (e) {{
+      toast('载入失败：' + e.message);
+    }} finally {{
+      btn.disabled = false;
+    }}
+  }});
+}});
+
+document.querySelectorAll('[data-del]').forEach((btn) => {{
+  btn.addEventListener('click', () => toast('删除用命令：canvas-library --rm ' + btn.dataset.del));
+}});
+</script>
+</body>
+</html>
+"""
+
+
+def main():
+    import sys
+
+    args = sys.argv[1:]
+    if args and args[0] == "--rm":
+        stem = args[1]
+        for ext in (".excalidraw", ".png"):
+            p = DRAW / (stem + ext)
+            if p.exists():
+                p.unlink()
+        print(f"removed {stem}")
+    items = cards()
+    INDEX.write_text(render(items), encoding="utf-8")
+    os.chmod(INDEX, 0o644)
+    print(f"{INDEX}: {len(items)} drawings")
+
+
+if __name__ == "__main__":
+    main()

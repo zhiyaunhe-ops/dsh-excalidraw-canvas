@@ -1,0 +1,11 @@
+:root{--dsh-embed-bg:#1c1f24}
+.dsh-embed-btn{position:fixed;right:18px;bottom:70px;z-index:2147483000;display:inline-flex;align-items:center;gap:6px;padding:9px 14px;border-radius:999px;background:rgba(28,31,36,.86);color:#fff;border:1px solid rgba(255,255,255,.12);box-shadow:0 4px 16px rgba(0,0,0,.25);backdrop-filter:blur(6px);font:600 13px/1 -apple-system,"PingFang SC","Noto Sans CJK SC",sans-serif;cursor:pointer;text-decoration:none}
+.dsh-embed-btn:hover{background:rgba(28,31,36,.96)}
+.dsh-embed-panel{display:none;position:fixed;right:18px;bottom:18px;width:430px;height:660px;min-width:320px;min-height:360px;max-width:calc(100vw - 36px);max-height:calc(100vh - 36px);z-index:2147483001;background:#fff;border:1px solid rgba(0,0,0,.12);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.35);overflow:hidden;resize:both;flex-direction:column}
+.dsh-embed-panel.open{display:flex}
+.dsh-embed-bar{flex:0 0 auto;display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--dsh-embed-bg);color:#fff;font:600 12px/1 -apple-system,"PingFang SC","Noto Sans CJK SC",sans-serif}
+.dsh-embed-bar .dsh-embed-title{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dsh-embed-bar a,.dsh-embed-bar button{color:#cfd6e2;background:transparent;border:0;font:inherit;cursor:pointer;text-decoration:none;padding:4px 6px;border-radius:6px}
+.dsh-embed-bar a:hover,.dsh-embed-bar button:hover{background:rgba(255,255,255,.12);color:#fff}
+.dsh-embed-frame{flex:1 1 auto;width:100%;border:0;background:#fff}
+@media (max-width:520px){.dsh-embed-panel{width:calc(100vw - 24px);right:12px;bottom:12px;height:70vh}}

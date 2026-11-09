@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# 保存当前画布到画布库：.excalidraw + PNG 预览 + 刷新库页面
+# 用法: canvas-save [名字]       默认名字 canvas
+set -euo pipefail
+
+DRAW="/var/www/canvas-library/drawings"
+NAME="${1:-canvas}"
+SLUG="$(python3 -c 'import re,sys; s=re.sub(r"[^\w\u4e00-\u9fff.-]+","-",sys.argv[1]); print(s.strip("-") or "canvas")' "$NAME")"
+TS="$(date +%Y%m%d-%H%M)"
+STEM="$SLUG-$TS"
+OUT="$DRAW/$STEM"
+
+mkdir -p "$DRAW"
+
+COUNT="$(curl -fsS --max-time 3 "${EXPRESS_SERVER_URL:-http://127.0.0.1:3000}/health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("elements_count", 0))')"
+if [ "${COUNT:-0}" -eq 0 ] && [ "${2:-}" != "--empty" ]; then
+  echo "画布是空的，没存。真要存空白图加 --empty" >&2
+  exit 1
+fi
+
+excalidraw-canvas export --out "$OUT.excalidraw" >/dev/null
+excalidraw-canvas screenshot --format png --out "$OUT.png" >/dev/null
+
+canvas-library
+
+echo "已保存  $OUT.excalidraw"
+echo "预览    $OUT.png"
+echo "画布库  https://$(awk '/server_name/ {print $2; exit}' /etc/nginx/sites-available/excalidraw-canvas | tr -d ';')/library/"

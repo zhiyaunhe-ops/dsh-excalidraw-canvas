@@ -16,7 +16,9 @@ Agents Anywhere / 任意客户端
         │                              excalidraw-canvas (systemd 常驻)
         ▼                                       ▲
   nginx :443  canvas-<ip>.sslip.io  ────────────┘
-        ▲
+        ▲                    │
+        │                    └─ /library/  画布库（存过的 .excalidraw + 预览）
+        │                       /dsh/      同源反代的 dsh 小窗（可选）
         │  ?k=<token> → 90 天 HttpOnly cookie
    手机 / 平板 / 桌面浏览器
 ```
@@ -57,6 +59,23 @@ excalidraw-canvas status                  # npm 包自带的 CLI，同效
 ```
 
 `curl -s 127.0.0.1:3000/health` 能看到 `elements_count`，用来判断 agent 到底画上去没有。
+
+## dsh 小窗与画布库（可选）
+
+画布页右下角可以再挂一个 dsh 对话面板：**一张画布一个会话**，工作区就是存画布的目录，点「载入画布」切图时面板会跟着换会话。同一页还有「← 画布库」，存过的图都列在那里，点一下就能装回画布中。
+
+```bash
+sudo ./dsh-embed/install.sh    # 面板 + 登录桥 + canvas-save/canvas-library + 会话插件
+```
+
+细节（为什么必须同源反代、登录桥怎么拿 token、插件的 API 坑）见 **[dsh-embed/README.md](dsh-embed/README.md)**。
+
+日常两条命令：
+
+```bash
+canvas-save 押金流程           # 当前画布 → drawings/押金流程-<时间>.excalidraw + .png
+canvas-library                 # 重新生成 /library/ 首页
+```
 
 ## 关键设计
 
