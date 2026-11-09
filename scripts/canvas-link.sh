@@ -4,13 +4,19 @@
 set -euo pipefail
 
 STATE_DIR="/etc/excalidraw-canvas"
-SITE="/etc/nginx/sites-available/excalidraw-canvas.conf"
 LINK_CONF="/etc/nginx/conf.d/canvas-link.conf"
 COOKIE_NAME="exc_link"
 
 die() { printf '\033[1;31merror\033[0m %s\n' "$*" >&2; exit 1; }
 [ -s "$STATE_DIR/token" ] || die "没有令牌文件 $STATE_DIR/token，先跑 install.sh"
-[ -f "$SITE" ] || die "没有 $SITE，先跑 install.sh"
+
+# install.sh 写的是 excalidraw-canvas.conf；早期手工装过的机器上是没有 .conf 的同名文件
+SITE=""
+for c in /etc/nginx/sites-available/excalidraw-canvas.conf \
+         /etc/nginx/sites-available/excalidraw-canvas; do
+  if [ -f "$c" ]; then SITE="$c"; break; fi
+done
+[ -n "$SITE" ] || die "没有 /etc/nginx/sites-available/excalidraw-canvas{,.conf}，先跑 install.sh"
 
 DOMAIN="$(awk '/server_name/ {print $2; exit}' "$SITE" | tr -d ';')"
 [ -n "$DOMAIN" ] || die "解析不出域名"

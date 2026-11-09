@@ -15,6 +15,8 @@ systemctl daemon-reload
 echo "==> 移除 nginx 站点与门禁"
 rm -f /etc/nginx/sites-enabled/excalidraw-canvas.conf \
       /etc/nginx/sites-available/excalidraw-canvas.conf \
+      /etc/nginx/sites-enabled/excalidraw-canvas \
+      /etc/nginx/sites-available/excalidraw-canvas \
       /etc/nginx/sites-enabled/excalidraw-canvas.acme.conf \
       /etc/nginx/sites-available/excalidraw-canvas.acme.conf \
       /etc/nginx/conf.d/canvas-link.conf
