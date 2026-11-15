@@ -1,109 +1,60 @@
-# dsh 助手：在云端画布里直接对话
+# 云端画布中的 DSH 助手
 
-编辑页顶部「助手」打开 dsh 对话侧栏，**一张画布一个会话**，工作区固定在画布库目录
-（`/var/www/canvas-library/drawings`，即 `~/canvases`）。从画布库打开另一张图时，
-小窗会自动换成那张图的会话。
+这是**云端模式**的同源助手桥。Desktop 本机使用 DSH 自己的对话，不安装本目录中的登录桥或 nginx 配置。两种方式的完整步骤见 [INSTALL.md](../INSTALL.md)。
 
-```
-画布页 https://<canvas>/ 
-  └─ /dsh-embed/embed.js        悬浮按钮 + 可缩放面板（iframe 懒加载）
-       └─ /dsh/login?canvas=X  登录桥：发 dsh-auth cookie，302 → /dsh/?canvas=X
-            └─ /dsh/            nginx 同源反代 → 127.0.0.1:8790（dsh web）
-                 └─ 插件 dsh-canvas-session：按 canvas=X 找/建专属会话
-```
+## 当前界面
 
-## 为什么是反代而不是 iframe 直连
+`app/src/AssistantDock.jsx` 持有按画布 ID 缓存的助手 iframe。进入工作空间、打开或新建画布时提前加载；收起侧栏、返回画布库和页面内切换文档不销毁已加载实例。显式「重新连接」和整页刷新会重新初始化 iframe，已有 DSH 会话继续复用。
 
-dsh 的登录 cookie 是 `SameSite=Strict`，而 `canvas-*.sslip.io` 和 `dsh-*.sslip.io`
-在浏览器眼里是**跨站**（sslip.io 不在公共后缀表里，退化成“整域 = 站点”），跨站
-iframe 里 Strict cookie 根本发不出去。所以必须把 dsh 反代到画布域名下的 `/dsh/`，
-让 iframe 与父页面同源。
-
-反代两个必须的细节（漏了就是 403）：
-
-- `proxy_set_header Host 127.0.0.1:8790;` —— dsh 的 `/api` 有 Host 围栏，Host 不对直接拒；
-- `proxy_set_header Origin ""; proxy_set_header Referer "";` —— 不清掉浏览器带的
-  canvas 源，dsh 会判成跨站请求。
-
-## 登录桥为什么存在
-
-dsh web 每次启动打印一个一次性的 `?token=` 登录链接，只出现在 journal 里。浏览器
-没法自己去读，所以 `dsh-embed-login.py`（systemd，监听 127.0.0.1:9110）替它取：
-
-- `GET /login?canvas=<stem>`：从 `journalctl -u dsh-web` 抓最后一个 token，向 8790
-  换出 `Set-Cookie`，`302` 到 `/dsh/?canvas=<stem>`；
-- `GET /healthz`：`ok`。
-
-重登按钮就是重新走一次 `/dsh/login`。
-
-## 一画布一 session 插件
-
-`plugin/dsh-canvas-session` 包含浏览器会话入口与 host 范围插件。浏览器端负责找/建会话并将 session ID 与 canvas ID 注册到工作空间；`host.js` 负责每轮上下文和 Excalidraw 工具的固定目标。
-
-- `package.json` 的 `dsh.client.platform = "web"`，`exports["./client"]` 指向浏览器包；
-- `client.js` 是 `window.__ModuleLoader__.load({...})` 形式的 cordis 插件，
-  `inject = ["sessions", "workspaces", "uiWorkspace"]`；
-- 从 URL 拿 `canvas` → 等两个列表快照 `phase === "ready"` → 查
-  `localStorage["dsh-canvas-session:<stem>"]`，命中且会话还在就打开；否则按标题
-  `画布 · <stem>` 兜底找（换浏览器/换设备也能复用）；都没有才 `sessions.create()`
-  并改名，然后 `uiWorkspace.openSession(id)`。
-
-安装方式是软链进 profile 的 `node_modules`，并在 `cordis.patch.yml` 里插一条：
-
-```yaml
-- insert:
-    - id: canvas-session
-      name: dsh-canvas-session
+```text
+/canvas/<id>（工作空间编辑页）
+  └─ 常驻 AssistantDock
+       └─ /dsh/login?canvas=<id>（登录桥）
+            └─ /dsh/?canvas=<id>（同源代理到 DSH web:8790）
+                 └─ 浏览器插件找/建对应会话，先持久化绑定再打开对话
 ```
 
-**host 的 cordis loader 会热加载 `cordis.patch.yml`，改完不用重启 dsh-web。**
+旧的 `web/embed.js`、`web/embed.css` 和静态 `canvas-library` 脚本为旧页面保留，新版编辑器不使用旧悬浮面板。画布库由工作空间实时读取文件。
 
-### 踩过的 API 坑
+## 安装约定
 
-- `ctx.get("sessions")` 是 ClientSessions：`create(opts)` **直接 resolve 出
-  sessionId 字符串**，失败是 throw（`SessionCreateError`），不是 `RemoteResult`；
-- `rename` 不在 ClientSessions 上，要用
-  `sessions.using(id, { source }, (ref) => ref.binding.session.rename(title))`；
-- 列表快照形状：`{ ids, byId, phase }`；工作区是 `{ items: [{ workspaceId, path, title }], phase }`；
-- create 大约要 1s，300ms 的轮询必须加 in-flight 守卫，否则一次失败能喷出几十个空会话。
-
-## 目录
-
-| 路径 | 作用 |
-| --- | --- |
-| `web/embed.js`, `web/embed.css` | 面板本体，部署到 `/var/www/canvas-embed/` |
-| `login/dsh-embed-login.py` | 登录桥，部署到运行用户家目录 |
-| `login/dsh-embed-login.service.tpl` | 登录桥 systemd 单元 |
-| `bin/canvas-save` | 保存当前画布（.excalidraw + PNG）并刷新画布库 |
-| `bin/canvas-library` | 扫 `drawings/` 生成 `/library/` 首页 |
-| `plugin/dsh-canvas-session/` | 一画布一 session 的浏览器插件 |
-| `install.sh` | 一把装完上面全部 |
-
-## 安装
+需要同一主机、同一运行用户的 `web` profile、`dsh-web` systemd 服务以及 `127.0.0.1:8790`。根安装器已部署画布应用和 nginx 后，再按接线方式选一条：
 
 ```bash
-# 先按仓库根目录的 README 装好画布站点，再：
-sudo ./dsh-embed/install.sh
+# 源码接线
+sudo env PATH="$PATH" ./dsh-embed/install.sh
 ```
 
-脚本会装文件、起登录桥、软链插件、补 `cordis.patch.yml`，最后打印访问链接。
-站点 nginx 配置在 `templates/excalidraw-canvas.site.tpl`（`/dsh/`、`/dsh/login`、
-`/dsh-embed/`、`/library/` 四个 location 都在里面，同样受 `?k=` 令牌门禁保护）。
+```bash
+# 已通过 DSH 插件管理器安装根目录 bundle
+sudo env PATH="$PATH" CANVAS_PLUGIN_MODE=bundle ./dsh-embed/install.sh
+```
 
-## 已知限制
+默认 `local` 指源码接线，不能与 bundle 重复安装。脚本兼容 `.conf` 和旧的无后缀 nginx 站点文件；自定义文件通过 `CANVAS_SITE` 指定。已有工作空间服务时不会再构建和重启一次。
 
-- 云端工作空间负责自动落盘并恢复当前文档；单个 MCP 服务同时对应一张当前画布。其他窗口切换画布后，可在编辑页重新连接助手。
-- 登录桥从 journal 抓 token，`dsh-web` 重启后旧 cookie 失效，需要点「重登」。
-- 会话映射存在浏览器 localStorage，换浏览器靠标题兜底；标题被手动改掉就会新建。
+## 代理与登录桥
 
-## 新版界面与保存
+nginx 将 `/dsh/` 代理到 DSH web，让 iframe 与画布页面同源。模板保留 DSH 所需的 Host、Origin 和 Referer 转发设置；单独在别的域名嵌入 DSH 登录页不能替代这套接线。
 
-`install.sh` 现在也会安装 `../app/` 的云端工作空间。`web/embed.*` 与 `bin/canvas-library` 保留为旧版兼容资源，新版 `/library/` 由工作空间实时读取服务器文件，`/canvas/<id>` 是独立编辑地址。Ctrl/Cmd+S、自动保存和云端副本均由工作空间处理；下载从导出菜单进入。助手侧栏复用这里的登录桥和一画布一会话插件。新版由 App 持有按画布 ID 复用的常驻助手实例，新建/打开画布时就开始加载；收起侧栏与页面内切换不会销毁 iframe。整页刷新会重新初始化，已有会话仍按原映射恢复。
+`login/dsh-embed-login.py` 监听 `127.0.0.1:9110`，从 `journalctl -u dsh-web` 读取当前启动的登录链接，完成登录交换后跳到 `/dsh/?canvas=<id>`。`GET /healthz` 检查桥是否运行。DSH 重启导致旧登录状态失效时，使用「重新连接」。
 
-## 会话编辑范围
+## 会话与画布范围
 
-`host.js` 作为独立 `canvas-session-scope` 条目装进 profile，可热加载而不重启 dsh。浏览器必须先完成 `/workspace/api/assistant/bindings` 注册再打开会话。已有会话可用 `scripts/bind-existing-sessions.py` 从旧会话标题迁移绑定，脚本只读取日志，不修改聊天内容。
+浏览器插件位于 `plugin/dsh-canvas-session/client.js`。它从 URL 读取画布 ID，等待 sessions/workspaces 列表 ready，复用本地记住的会话；首次或换设备时按约定标题查找，找不到才创建。每次打开前，先向工作空间登记 `sessionId → canvasId`。
 
-绑定一旦存在，不随会话或画布改名改变。host 的 required prompt context 每轮读取该映射和对应 `.excalidraw` 文件的最新名称与版本，包含地址、路径和范围说明。子会话沿 parentSession 继承绑定；绑定目标已删除时不会自动落到其他画布。
+权威绑定保存在 `/var/www/canvas-library/.assistant-bindings.json`。绑定完成后，重命名画布或会话不会改变编辑目标。浏览器 localStorage 用于定位会话，不能替代服务器的固定绑定。已有旧会话由 `scripts/bind-existing-sessions.py` 迁移，它只读取日志，不修改聊天内容。
 
-host 包裹 `mcp__excalidraw__*` 调用，开始前向工作空间领取工具运行记录，验证当前画布与会话目标一致。期间浏览器对同一画布的保存会稍后重试；打开其他图会排队至此次工具落盘结束。finally 中保存并释放，工具失败或取消也会释放。若窗口已切走，旧会话的下一次绘图调用会返回明确的目标不一致提示。这个范围控制用于 dsh 插件的绘图工具；它不改变主机通用文件或 shell 权限。MCP 导出到云端 drawings 目录（包含 ~/canvases 目录软链）会被拒绝；云端保存由工作空间负责，下载副本使用独立导出目录。
+host 插件 `host.js` 每轮读取绑定文件与图纸，将 ID、名称、地址、路径和最新版本注入助手上下文。子会话沿 `parentSession` 继承目标。`mcp__excalidraw__*` 执行前核对当前画布，执行期间固定目标，结束后保存再释放；切换图纸会等这次工具完成。导出不能直接覆写工作空间的 drawings 文件。
+
+普通 DSH 对话也可调用 `canvas_list`、`canvas_select`、`canvas_context`。一个会话固定对应一张画布；另一个目标使用另一个对话。单个 MCP 实时服务同时对应一张当前画布。
+
+## 源码接线升级
+
+先更新并启动工作空间，再更新范围插件：
+
+```bash
+sudo env PATH="$PATH" ./scripts/install-workspace.sh
+sudo env PATH="$PATH" ./scripts/install-session-scope.sh
+```
+
+范围插件通过 profile patch 热加载，不需要重启 DSH。bundle 安装通过插件管理器更新，不执行源码接线脚本。

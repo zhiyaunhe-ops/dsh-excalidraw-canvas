@@ -337,7 +337,7 @@ test('host prompts follow inherited bindings and read current title and revision
   const prompt = host.prompts.get('child-session').text();
   assert.match(prompt, new RegExp(`canvas_id: ${aId}`));
   assert.match(prompt, /名称: 当前画布/);
-  assert.match(prompt, /云端版本: 1/);
+  assert.match(prompt, /保存版本: 1/);
   assert.match(prompt, new RegExp(`https://canvas\\.example\\.test/canvas/${aId}`));
   const inherited = await host.tools.get('canvas_context').execute({}, { agent: host.agents.get('child-session') });
   assert.equal(inherited.sessionId, 'parent-session');
@@ -348,7 +348,7 @@ test('host prompts follow inherited bindings and read current title and revision
   await f.send('PUT', `/workspace/api/documents/${aId}`, { revision: detail.body.document.revision, scene: { ...detail.body.scene, elements: [element('next-revision')] } });
   const updatedPrompt = host.prompts.get('child-session').text();
   assert.match(updatedPrompt, /名称: Updated canvas name/);
-  assert.match(updatedPrompt, /云端版本: 2/);
+  assert.match(updatedPrompt, /保存版本: 2/);
 
   const missingPrompt = host.prompts.get('stale-session').text();
   assert.match(missingPrompt, /绑定的画布 .* 已不存在/);
@@ -417,7 +417,7 @@ test('rejects Excalidraw exports into drawings through a directory symlink but a
   await symlink(path.join(f.temp, 'drawings'), path.join(home, 'canvases'), 'dir');
   for (const name of ['mcp__excalidraw__export_scene', 'mcp__excalidraw__export_to_image']) {
     let invoked = false;
-    await assert.rejects(host.execute({ name, agent: host.agents.get('export-session'), arguments: { filePath: path.join(home, 'canvases', `${canvasId}.excalidraw`) } }, async () => { invoked = true; }), /不能用 export_scene \/ export_to_image 覆写云端画布文件/);
+    await assert.rejects(host.execute({ name, agent: host.agents.get('export-session'), arguments: { filePath: path.join(home, 'canvases', `${canvasId}.excalidraw`) } }, async () => { invoked = true; }), /不能用 export_scene \/ export_to_image 覆写工作空间画布文件/);
     assert.equal(invoked, false);
   }
 

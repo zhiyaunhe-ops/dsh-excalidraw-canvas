@@ -53,7 +53,7 @@ test('packs a resolvable DSH bundle with its host, context, and root-namespaced 
   const archive = path.join(temp, packed[0].filename);
   const listing = execFileSync('tar', ['-tzf', archive], { encoding: 'utf8' }).trim().split('\n');
   for (const file of [
-    'package/package.json', 'package/cordis.patch.yml', 'package/plugin/index.js', 'package/plugin/host.js', 'package/plugin/client.js',
+    'package/package.json', 'package/INSTALL.md', 'package/cordis.patch.yml', 'package/plugin/index.js', 'package/plugin/host.js', 'package/plugin/client.js',
     'package/dsh-embed/plugin/dsh-canvas-session/index.js', 'package/dsh-embed/plugin/dsh-canvas-session/host.js',
     'package/dsh-embed/plugin/dsh-canvas-session/context.js', 'package/dsh-embed/plugin/dsh-canvas-session/client.js',
   ]) assert(listing.includes(file), `npm pack omitted ${file}`);
@@ -80,5 +80,7 @@ test('packs a resolvable DSH bundle with its host, context, and root-namespaced 
   vm.runInNewContext(client, { window: { __ModuleLoader__: { load(definition) { loadedClient = definition; } } } });
   assert.equal(loadedClient.id, packedManifest.name);
   assert.equal(typeof loadedClient.factory, 'function');
-  assert.match(await readFile(hostPath, 'utf8'), /export \{ name, inject, apply \}/);
+  const hostSource = await readFile(hostPath, 'utf8');
+  assert.match(hostSource, /export \{ name, inject \}/);
+  assert.match(hostSource, /export async function apply\(/);
 });

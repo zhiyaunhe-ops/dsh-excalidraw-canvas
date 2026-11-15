@@ -62,3 +62,17 @@ test('preloads each document once and keeps its iframe mounted while collapsing 
 
   act(() => renderer.unmount());
 });
+
+test('desktop assistant presents a copyable session prompt without creating an iframe', () => {
+  let renderer;
+  act(() => renderer = TestRenderer.create(dock({
+    mode: 'desktop', documents: [{ id: 'desktop-canvas', title: 'Local plan', active: true }], currentId: 'desktop-canvas', open: true,
+  })));
+  assert.equal(renderer.root.findAllByType('iframe').length, 0);
+  const prompt = renderer.root.findByType('textarea').props.value;
+  assert.match(prompt, /canvas_select/);
+  assert.match(prompt, /desktop-canvas/);
+  assert.match(renderer.root.findByType('label').children.join(''), /Local plan/);
+  assert.match(renderer.root.findAllByType('button').map(button => button.children.join('')).join(' '), /复制绑定指令/);
+  act(() => renderer.unmount());
+});

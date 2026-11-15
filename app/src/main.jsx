@@ -8,6 +8,8 @@ import { AssistantDock } from './AssistantDock';
 window.EXCALIDRAW_ASSET_PATH = '/workspace/';
 const API = '/workspace/api';
 const clientId = crypto.randomUUID();
+const mode = window.CANVAS_RUNTIME?.mode || 'cloud';
+const storage = mode === 'desktop' ? '本机' : '云端';
 const paths = {
   arrow: <><path d="m9 18 6-6-6-6" /></>,
   back: <><path d="m12 19-7-7 7-7M5 12h14" /></>,
@@ -86,7 +88,7 @@ function App() {
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('canvas-theme', theme); }, [theme]);
   const id = route.startsWith('/canvas/') ? decodeURIComponent(route.slice(8)) : null;
   const shared = { navigate, notify, theme, chat, setChat: showAssistant, prepareAssistant, registerAssistant: (id, handlers) => { if (handlers) assistantHandlers.current.set(id, handlers); else assistantHandlers.current.delete(id); }, setNavigationGuard: guard => { navigationGuard.current = guard; }, toggleTheme: () => setTheme(theme === 'light' ? 'dark' : 'light') };
-  return <><div className={`workspace${id ? ' editor-workspace' : ''}${id && chat ? ' assistant-open' : ''}`}><div className="page-view">{id ? <Editor key={id} id={id} {...shared} /> : <Library {...shared} />}</div><AssistantDock documents={assistantDocuments} currentId={id} open={chat} onClose={() => showAssistant(false)} onConnect={id => assistantHandlers.current.get(id)?.connect()} onKeyDown={(id, event) => assistantHandlers.current.get(id)?.keydown(event)} Icon={Icon} /></div>{toast && <div className="toast" role="status"><Icon name="check" />{toast}</div>}</>;
+  return <><div className={`workspace${id ? ' editor-workspace' : ''}${id && chat ? ' assistant-open' : ''}`}><div className="page-view">{id ? <Editor key={id} id={id} {...shared} /> : <Library {...shared} />}</div><AssistantDock mode={mode} documents={assistantDocuments} currentId={id} open={chat} onClose={() => showAssistant(false)} onConnect={id => assistantHandlers.current.get(id)?.connect()} onKeyDown={(id, event) => assistantHandlers.current.get(id)?.keydown(event)} Icon={Icon} /></div>{toast && <div className="toast" role="status"><Icon name="check" />{toast}</div>}</>;
 }
 function Library({ navigate, notify, theme, toggleTheme, prepareAssistant }) {
   const [items, setItems] = useState([]);
@@ -110,32 +112,32 @@ function Library({ navigate, notify, theme, toggleTheme, prepareAssistant }) {
     try { const scene = JSON.parse(await file.text()); if (!Array.isArray(scene.elements)) throw new Error('文件中没有有效的 Excalidraw 画布'); await create(file.name.replace(/\.excalidraw$|\.json$/i, ''), scene); }
     catch (e) { notify(`导入失败：${e.message}`); } finally { setBusy(false); e.target.value = ''; }
   }
-  async function duplicate(item) { try { const { scene } = await request(`/documents/${encodeURIComponent(item.id)}`); const result = await send('/documents', { title: item.title + ' · 副本', scene }); prepareAssistant({ id: result.document.id, title: result.document.title }); await refresh(); notify('已在云端创建副本'); return result; } catch (e) { notify(e.message); } }
+  async function duplicate(item) { try { const { scene } = await request(`/documents/${encodeURIComponent(item.id)}`); const result = await send('/documents', { title: item.title + ' · 副本', scene }); prepareAssistant({ id: result.document.id, title: result.document.title }); await refresh(); notify(`已在${storage}创建副本`); return result; } catch (e) { notify(e.message); } }
   const filtered = items.filter(item => item.title.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === 'name' ? a.title.localeCompare(b.title, 'zh-CN') : b.updatedAt.localeCompare(a.updatedAt));
   const current = items.find(item => item.id === activeId);
   return <div className="library-layout">
     <aside className="sidebar"><a className="brand" href="/library/" onClick={e => { e.preventDefault(); navigate('/library/'); }}><Mark /><span>画布<span className="brand-sub">DeepSeek Harness</span></span></a>
       <div className="sidebar-caption">工作空间</div><button className="nav-item selected"><Icon name="grid" />所有画布<span>{items.length}</span></button>
       {current && <button className="nav-item" onClick={() => open(activeId)}><Icon name="pen" />继续绘图<Icon name="arrow" size={14} /></button>}
-      <div className="sidebar-note"><span className="cloud-label"><Icon name="cloud" />云端工作空间</span><p>每一个想法，都有地方安放。<br />画布自动保存在服务器。</p><div className="shortcut">快速保存 <kbd>⌘ / Ctrl</kbd><kbd>S</kbd></div></div>
+      <div className="sidebar-note"><span className="cloud-label"><Icon name="cloud" />{storage}工作空间</span><p>每一个想法，都有地方安放。<br />画布自动保存在{mode === 'desktop' ? '本机工作目录' : '服务器'}。</p><div className="shortcut">快速保存 <kbd>⌘ / Ctrl</kbd><kbd>S</kbd></div></div>
       <button className="theme-button" onClick={toggleTheme}><Icon name={theme === 'light' ? 'moon' : 'sun'} />{theme === 'light' ? '深色外观' : '浅色外观'}</button>
     </aside>
-    <main className="library-main"><header className="library-topbar"><div className="breadcrumb">工作空间<Icon name="arrow" size={13} /><span>所有画布</span></div><span className="top-cloud"><span className="status-dot" />云端存储</span></header>
+    <main className="library-main"><header className="library-topbar"><div className="breadcrumb">工作空间<Icon name="arrow" size={13} /><span>所有画布</span></div><span className="top-cloud"><span className="status-dot" />{storage}存储</span></header>
       <div className="library-content"><section className="library-heading"><div><span className="eyebrow">YOUR CREATIVE SPACE</span><h1>让想法，跃然纸上<span className="heading-dot">。</span></h1><p>草图、流程与灵感，都从一张画布开始。</p></div><div className="heading-actions"><button className="button" disabled={busy} onClick={() => importRef.current.click()}><Icon name="upload" />{busy ? '导入中…' : '导入画布'}</button><button className="button primary" onClick={() => setModal({ type: 'new' })}><Icon name="plus" />新建画布</button></div></section>
         <input type="file" accept=".excalidraw,.json" ref={importRef} hidden onChange={importFile} />
         {current && !query && <button className="continue-card" onClick={() => open(activeId)}><span className="continue-icon"><Icon name="pen" size={23} /></span><span className="continue-text"><small>接着上次的灵感</small><strong>{current.title}</strong></span><span className="continue-cta">继续编辑<Icon name="arrow" size={17} /></span></button>}
         <div className="library-tools"><div className="section-title">所有画布<span>{items.length}</span></div><div className="filter-tools"><label className="search-field"><Icon name="search" size={17} /><input aria-label="搜索画布" placeholder="搜索画布…" value={query} onChange={e => setQuery(e.target.value)} />{query && <button aria-label="清空搜索" onClick={() => setQuery('')}><Icon name="close" size={14} /></button>}</label><select aria-label="排序方式" value={sort} onChange={e => setSort(e.target.value)}><option value="updated">最近更新</option><option value="name">名称排序</option></select></div></div>
-        {error ? <div className="empty-state" role="alert"><Icon name="cloud" size={32} /><h2>暂时无法读取画布</h2><p>{error}</p><button className="button" onClick={refresh}>重新载入</button></div> : loading ? <div className="loading-state"><span className="spinner" />正在读取云端画布…</div> : <div className="canvas-grid">
+        {error ? <div className="empty-state" role="alert"><Icon name="cloud" size={32} /><h2>暂时无法读取画布</h2><p>{error}</p><button className="button" onClick={refresh}>重新载入</button></div> : loading ? <div className="loading-state"><span className="spinner" />正在读取{storage}画布…</div> : <div className="canvas-grid">
           {!query && <button className="new-card" onClick={() => setModal({ type: 'new' })}><span><Icon name="plus" size={24} /></span><strong>一张新画布</strong><small>给下一个想法留点空间</small></button>}
           {filtered.map(item => <article className="canvas-card" key={item.id}><button className="card-preview" onClick={() => open(item.id)} aria-label={`打开 ${item.title}`}>{item.count ? <img src={`${API}/documents/${encodeURIComponent(item.id)}/preview?v=${encodeURIComponent(item.updatedAt)}`} loading="lazy" alt={item.title} onError={e => { e.target.style.display = 'none'; }} /> : <span className="blank-preview"><Icon name="file" size={34} /><span>空白画布</span></span>}{item.active && <span className="active-badge"><span className="status-dot" />正在使用</span>}<span className="preview-open">打开画布<Icon name="arrow" size={15} /></span></button><div className="card-meta"><div><button className="card-title" title={item.title} onClick={() => open(item.id)}>{item.title}</button><p>{date(item.updatedAt)}<span>·</span>{item.count} 个元素</p></div><div className="card-menu-wrap"><button className="icon-button" aria-label={`${item.title}的更多操作`} aria-expanded={menu === item.id} onClick={e => { e.stopPropagation(); setMenu(menu === item.id ? null : item.id); }}><Icon name="more" /></button>{menu === item.id && <div className="dropdown"><button onClick={() => setModal({ type: 'rename', item })}><Icon name="pen" />重命名</button><button onClick={() => duplicate(item)}><Icon name="copy" />创建副本</button><a href={`${API}/documents/${encodeURIComponent(item.id)}/export/excalidraw`} download><Icon name="download" />导出文件</a><button className="danger" onClick={() => setModal({ type: 'delete', item })}><Icon name="trash" />删除画布</button></div>}</div></div></article>)}
         </div>}
         {!loading && query && filtered.length === 0 && <div className="empty-state"><Icon name="search" size={32} /><h2>没有找到相关画布</h2><p>换个关键词试试。</p></div>}
-        <footer className="library-footer"><span>由 Excalidraw 驱动 · 为灵感而建</span><span>保存在云端，随时继续</span></footer>
+        <footer className="library-footer"><span>由 Excalidraw 驱动 · 为灵感而建</span><span>保存在{storage}，随时继续</span></footer>
       </div>
     </main>
     {modal?.type === 'new' && <NameModal title="开始一张新画布" initial="未命名画布" label="创建画布" close={() => setModal(null)} submit={title => create(title)} />}
     {modal?.type === 'rename' && <NameModal title="重命名画布" initial={modal.item.title} close={() => setModal(null)} submit={async title => { await send(`/documents/${encodeURIComponent(modal.item.id)}`, { title }, 'PATCH'); await refresh(); notify('名称已更新'); }} />}
-    {modal?.type === 'delete' && <Modal title="删除这张画布？" close={() => setModal(null)} actions={<><button className="button" onClick={() => setModal(null)}>取消</button><button className="button danger-button" onClick={async () => { try { await request(`/documents/${encodeURIComponent(modal.item.id)}`, { method: 'DELETE' }); setModal(null); refresh(); notify('画布已删除'); } catch (e) { notify(e.message); } }}>删除画布</button></>}><p className="modal-copy">「{modal.item.title}」将从云端删除，此操作无法撤销。</p>{modal.item.active && <p className="error-text">这张画布正在使用，请先打开另一张画布。</p>}</Modal>}
+    {modal?.type === 'delete' && <Modal title="删除这张画布？" close={() => setModal(null)} actions={<><button className="button" onClick={() => setModal(null)}>取消</button><button className="button danger-button" onClick={async () => { try { await request(`/documents/${encodeURIComponent(modal.item.id)}`, { method: 'DELETE' }); setModal(null); refresh(); notify('画布已删除'); } catch (e) { notify(e.message); } }}>删除画布</button></>}><p className="modal-copy">「{modal.item.title}」将从{storage}删除，此操作无法撤销。</p>{modal.item.active && <p className="error-text">这张画布正在使用，请先打开另一张画布。</p>}</Modal>}
   </div>;
 }
 
@@ -180,9 +182,9 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
     const m = model.current;
     clearTimeout(m.timer);
     if (!m.scene) return;
-    if (m.conflict) throw new Error('请先保留为副本，或重新载入云端版本');
+    if (m.conflict) throw new Error(`请先保留为副本，或重新载入${storage}版本`);
     if (m.saving) { await m.saving; if (m.dirty) return save(manual); return; }
-    if (!m.dirty) { if (manual) notify('所有更改已保存到云端'); return; }
+    if (!m.dirty) { if (manual) notify(`所有更改已保存到${storage}`); return; }
     setStatus('saving'); setError('');
     const snapshot = m.scene;
     const signature = fingerprint(snapshot);
@@ -190,7 +192,7 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
       m.revision = result.document.revision;
       m.baseline = signature;
       m.dirty = fingerprint(m.scene) !== signature;
-      if (!m.disposed) { setStatus(m.dirty ? 'pending' : 'saved'); if (manual) notify('已保存到云端'); }
+      if (!m.disposed) { setStatus(m.dirty ? 'pending' : 'saved'); if (manual) notify(`已保存到${storage}`); }
     }).catch(e => {
       m.dirty = true;
       if (e.status === 423) {
@@ -214,7 +216,7 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
         request(`/documents/${encoded}`).then(result => {
           if (m.disposed) return;
           if (m.scene && result.document.revision !== m.revision) {
-            if (m.dirty || m.saving) { m.conflict = true; setStatus('error'); setError('云端内容已更新，请保留为副本或重新载入。'); }
+            if (m.dirty || m.saving) { m.conflict = true; setStatus('error'); setError(`${storage}内容已更新，请保留为副本或重新载入。`); }
             else applyRemote(result);
           }
           if (m.dirty && !m.conflict) autosave.current();
@@ -226,7 +228,7 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
         if (message.type === 'active') setActive(message.id === id);
         if (message.type === 'renamed' && message.document.id === id) updateTitle(message.document.title);
         if (message.type === 'scene' && message.document.id === id && message.source !== clientId) {
-          if (m.dirty || m.saving) { m.conflict = true; clearTimeout(m.timer); setStatus('error'); setError('画布已由助手或其他窗口更新。请保留为副本，或重新载入云端版本。'); }
+          if (m.dirty || m.saving) { m.conflict = true; clearTimeout(m.timer); setStatus('error'); setError(`画布已由助手或其他窗口更新。请保留为副本，或重新载入${storage}版本。`); }
           else { applyRemote(message); setStatus('saved'); }
         }
         if (!apiRef.current || !model.current.scene || !model.current.active) return;
@@ -295,19 +297,19 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
     try { await save(); const response = await fetch(`${API}/documents/${encoded}/export/${format}`); if (!response.ok) throw new Error((await response.json()).error); const url = URL.createObjectURL(await response.blob()); const a = document.createElement('a'); a.href = url; a.download = `${model.current.title}.${format}`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); notify('导出文件已准备好'); } catch (e) { setError(e.message); }
   }
   if (loadError) return <div className="full-state"><Mark /><h2>无法打开画布</h2><p>{loadError}</p><button className="button primary" onClick={() => navigate('/library/')}>返回画布库</button><button className="button" onClick={() => location.reload()}>重试</button></div>;
-  if (!loaded) return <div className="full-state"><span className="spinner" /><p>正在打开云端画布…</p></div>;
+  if (!loaded) return <div className="full-state"><span className="spinner" /><p>正在打开{storage}画布…</p></div>;
   return <div className="editor-layout">
-    <header className="editor-header"><button className="icon-button back-button" onClick={leave} title="返回画布库（Ctrl / ⌘ O）" aria-label="返回画布库"><Icon name="back" /></button><Mark /><div className="document-heading"><input className="document-title" aria-label="画布名称" maxLength={120} value={title} onChange={e => updateTitle(e.target.value)} onBlur={renameTitle} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /><span className={`save-status ${status}`} aria-live="polite">{status === 'saving' ? <span className="spinner small" /> : <Icon name={status === 'saved' ? 'check' : 'cloud'} size={13} />}{status === 'saved' ? '已保存到云端' : status === 'saving' ? '正在保存…' : status === 'pending' ? '等待保存…' : '保存未完成'}</span></div>
-      <div className="editor-actions"><button className="icon-button theme-toggle" onClick={toggleTheme} title="切换外观"><Icon name={theme === 'light' ? 'moon' : 'sun'} /></button><div className="export-wrap"><button className="button" aria-expanded={exportMenu} onClick={e => { e.stopPropagation(); setExportMenu(!exportMenu); }}><Icon name="download" /><span>导出</span></button>{exportMenu && <div className="dropdown export-dropdown">{['png', 'svg', 'excalidraw'].map(format => <button key={format} onClick={() => exportFile(format)}><Icon name={format === 'excalidraw' ? 'file' : 'download'} />{format === 'excalidraw' ? 'Excalidraw 源文件' : `${format.toUpperCase()} 图片`}</button>)}<hr /><button onClick={() => setCopyModal(true)}><Icon name="copy" />另存为云端副本</button></div>}</div><button className="button primary save-button" disabled={status === 'saving'} onClick={() => save(true).catch(() => {})}><Icon name="cloud" /><span>保存</span><kbd>⌘ / Ctrl S</kbd></button><button className={`button chat-button ${chat ? 'pressed' : ''}`} onClick={() => setChat(!chat)}><Icon name="chat" /><span>助手</span></button></div>
+    <header className="editor-header"><button className="icon-button back-button" onClick={leave} title="返回画布库（Ctrl / ⌘ O）" aria-label="返回画布库"><Icon name="back" /></button><Mark /><div className="document-heading"><input className="document-title" aria-label="画布名称" maxLength={120} value={title} onChange={e => updateTitle(e.target.value)} onBlur={renameTitle} onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} /><span className={`save-status ${status}`} aria-live="polite">{status === 'saving' ? <span className="spinner small" /> : <Icon name={status === 'saved' ? 'check' : 'cloud'} size={13} />}{status === 'saved' ? `已保存到${storage}` : status === 'saving' ? '正在保存…' : status === 'pending' ? '等待保存…' : '保存未完成'}</span></div>
+      <div className="editor-actions"><button className="icon-button theme-toggle" onClick={toggleTheme} title="切换外观"><Icon name={theme === 'light' ? 'moon' : 'sun'} /></button><div className="export-wrap"><button className="button" aria-expanded={exportMenu} onClick={e => { e.stopPropagation(); setExportMenu(!exportMenu); }}><Icon name="download" /><span>导出</span></button>{exportMenu && <div className="dropdown export-dropdown">{['png', 'svg', 'excalidraw'].map(format => <button key={format} onClick={() => exportFile(format)}><Icon name={format === 'excalidraw' ? 'file' : 'download'} />{format === 'excalidraw' ? 'Excalidraw 源文件' : `${format.toUpperCase()} 图片`}</button>)}<hr /><button onClick={() => setCopyModal(true)}><Icon name="copy" />另存为{storage}副本</button></div>}</div><button className="button primary save-button" disabled={status === 'saving'} onClick={() => save(true).catch(() => {})}><Icon name="cloud" /><span>保存</span><kbd>⌘ / Ctrl S</kbd></button><button className={`button chat-button ${chat ? 'pressed' : ''}`} onClick={() => setChat(!chat)}><Icon name="chat" /><span>助手</span></button></div>
     </header>
     <div className="editor-notices">{error && <div className="editor-banner error-banner" role="alert"><span>{error}</span><div><button onClick={() => setCopyModal(true)}>保留为副本</button><button onClick={() => { if (!model.current.dirty || window.confirm('重新载入将放弃本地尚未保存的更改，继续？')) location.reload(); }}>重新载入</button><button onClick={() => save(true).catch(() => {})}>重试保存</button></div></div>}
-    {!active && <div className="editor-banner"><span>助手当前连接了另一张画布。这张画布仍可编辑并保存到云端。</span><button onClick={connectAssistant}>让助手连接这张画布</button></div>}</div>
+    {!active && <div className="editor-banner"><span>助手当前连接了另一张画布。这张画布仍可编辑并保存到{storage}。</span><button onClick={connectAssistant}>让助手连接这张画布</button></div>}</div>
     <div className="editor-body"><main className="drawing-area"><Excalidraw excalidrawAPI={api => { apiRef.current = api; }} initialData={{ ...loaded.scene, scrollToContent: true }} onChange={onChange} theme={theme} langCode="zh-CN" name={title} UIOptions={{ canvasActions: { loadScene: false, saveToActiveFile: false, export: false, saveAsImage: false } }}>
-      <MainMenu><MainMenu.Item onSelect={() => save(true).catch(() => {})} icon={<Icon name="cloud" />} shortcut="Ctrl / ⌘ S">保存到云端</MainMenu.Item><MainMenu.Item onSelect={() => setCopyModal(true)} icon={<Icon name="copy" />}>另存为云端副本</MainMenu.Item><MainMenu.Item onSelect={leave} icon={<Icon name="grid" />}>打开画布库</MainMenu.Item><MainMenu.Separator /><MainMenu.Item onSelect={() => apiRef.current.updateScene({ appState: { gridModeEnabled: !apiRef.current.getAppState().gridModeEnabled } })} icon={<Icon name="grid" />}>切换网格</MainMenu.Item><MainMenu.Item onSelect={() => apiRef.current.updateScene({ appState: { objectsSnapModeEnabled: !apiRef.current.getAppState().objectsSnapModeEnabled } })}>切换对象吸附</MainMenu.Item><MainMenu.DefaultItems.CommandPalette /><MainMenu.DefaultItems.SearchMenu /><MainMenu.Separator /><MainMenu.DefaultItems.ClearCanvas /><MainMenu.DefaultItems.ChangeCanvasBackground /><MainMenu.DefaultItems.Help /></MainMenu>
+      <MainMenu><MainMenu.Item onSelect={() => save(true).catch(() => {})} icon={<Icon name="cloud" />} shortcut="Ctrl / ⌘ S">保存到{storage}</MainMenu.Item><MainMenu.Item onSelect={() => setCopyModal(true)} icon={<Icon name="copy" />}>另存为{storage}副本</MainMenu.Item><MainMenu.Item onSelect={leave} icon={<Icon name="grid" />}>打开画布库</MainMenu.Item><MainMenu.Separator /><MainMenu.Item onSelect={() => apiRef.current.updateScene({ appState: { gridModeEnabled: !apiRef.current.getAppState().gridModeEnabled } })} icon={<Icon name="grid" />}>切换网格</MainMenu.Item><MainMenu.Item onSelect={() => apiRef.current.updateScene({ appState: { objectsSnapModeEnabled: !apiRef.current.getAppState().objectsSnapModeEnabled } })}>切换对象吸附</MainMenu.Item><MainMenu.DefaultItems.CommandPalette /><MainMenu.DefaultItems.SearchMenu /><MainMenu.Separator /><MainMenu.DefaultItems.ClearCanvas /><MainMenu.DefaultItems.ChangeCanvasBackground /><MainMenu.DefaultItems.Help /></MainMenu>
       <WelcomeScreen><WelcomeScreen.Center><WelcomeScreen.Center.Heading>给想法一点自由的空间</WelcomeScreen.Center.Heading><WelcomeScreen.Center.Menu><WelcomeScreen.Center.MenuItem onSelect={() => setChat(true)} icon={<Icon name="chat" />}>和助手一起画</WelcomeScreen.Center.MenuItem></WelcomeScreen.Center.Menu></WelcomeScreen.Center></WelcomeScreen>
     </Excalidraw></main></div>
-    <footer className="editor-footer"><span><span className={`status-dot ${connected ? '' : 'offline'}`} />{connected ? active ? '助手已连接此画布' : '云端编辑' : '助手连接中断'}<span className="footer-divider" />{count} 个元素</span><span className="footer-hint">更改自动保存到云端<span className="footer-divider" />Ctrl / ⌘ S 立即保存</span></footer>
-    {copyModal && <NameModal title="另存为云端副本" initial={title + ' · 副本'} label="保存副本" close={() => setCopyModal(false)} submit={async name => { const result = await send('/documents', { title: name, scene: model.current.scene }); model.current.dirty = false; model.current.conflict = false; prepareAssistant({ id: result.document.id, title: result.document.title }); notify('已保存为云端副本'); navigate(`/canvas/${result.document.id}`); }} />}
+    <footer className="editor-footer"><span><span className={`status-dot ${connected ? '' : 'offline'}`} />{connected ? active ? '助手已连接此画布' : `${storage}编辑` : '助手连接中断'}<span className="footer-divider" />{count} 个元素</span><span className="footer-hint">更改自动保存到{storage}<span className="footer-divider" />Ctrl / ⌘ S 立即保存</span></footer>
+    {copyModal && <NameModal title={`另存为${storage}副本`} initial={title + ' · 副本'} label="保存副本" close={() => setCopyModal(false)} submit={async name => { const result = await send('/documents', { title: name, scene: model.current.scene }); model.current.dirty = false; model.current.conflict = false; prepareAssistant({ id: result.document.id, title: result.document.title }); notify(`已保存为${storage}副本`); navigate(`/canvas/${result.document.id}`); }} />}
   </div>;
 }
 

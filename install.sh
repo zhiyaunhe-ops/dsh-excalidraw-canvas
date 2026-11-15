@@ -123,6 +123,7 @@ cat <<EOF
   令牌文件  $STATE_DIR/token
 
 下一步接 dsh：
-  $REPO_DIR/scripts/install-dsh-mcp.sh web && sudo systemctl restart dsh-web
+  $REPO_DIR/scripts/install-dsh-mcp.sh web
+  sudo env PATH="$PATH" $REPO_DIR/dsh-embed/install.sh
 ============================================================
 EOF

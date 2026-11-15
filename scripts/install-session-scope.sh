@@ -9,6 +9,7 @@ SITE="${CANVAS_SITE:-/etc/nginx/sites-available/excalidraw-canvas}"
 [ -f "$SITE" ] || SITE="${SITE}.conf"
 DOMAIN="$(awk '/server_name/ {print $2; exit}' "$SITE" | tr -d ';')"
 [ "$(id -u)" -eq 0 ] || { echo '请用 sudo 运行' >&2; exit 1; }
+[ ! -f "$PROFILE/node_modules/dsh-excalidraw-canvas/package.json" ] || { echo "bundle 已提供会话范围插件，请通过 DSH 插件管理器更新 bundle" >&2; exit 1; }
 [ -f "$PROFILE/cordis.patch.yml" ] || { echo '未安装 DSH web profile，跳过会话插件'; exit 0; }
 install -d "$PROFILE/node_modules"
 ln -sfn "$REPO_DIR/dsh-embed/plugin/dsh-canvas-session" "$PROFILE/node_modules/dsh-canvas-session"

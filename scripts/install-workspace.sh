@@ -17,7 +17,7 @@ install -d -o "$RUN_USER" -g www-data /var/www/canvas-library/drawings
 if [ ! -f /etc/systemd/system/canvas-workspace.service ]; then
   cp -a /var/www/canvas-library "/var/www/canvas-library-before-workspace-$STAMP"
 fi
-sudo -u "$RUN_USER" bash -c 'cd "$1" && npm ci --no-audit --no-fund && npm run build' bash "$REPO_DIR/app"
+sudo -u "$RUN_USER" env PATH="$PATH" bash -c 'cd "$1" && npm ci --no-audit --no-fund && npm run build' bash "$REPO_DIR/app"
 sed -e "s|__RUN_USER__|$RUN_USER|g" -e "s|__REPO_DIR__|$REPO_DIR|g" \
   -e "s|__NODE_BIN__|$NODE_BIN|g" -e "s|__PACKAGE_DIR__|$PACKAGE_DIR|g" \
   -e "s|__PORT__|$PORT|g" "$REPO_DIR/templates/canvas-workspace.service.tpl" \
@@ -26,6 +26,14 @@ chown "$RUN_USER":www-data /var/www/canvas-library
 systemctl daemon-reload
 systemctl enable canvas-workspace.service
 systemctl restart canvas-workspace.service
+
+# Migration and browser binding call this API immediately after installation.
+for _ in $(seq 1 20); do
+  if curl -fsS --max-time 2 http://127.0.0.1:9111/workspace/api/documents >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+curl -fsS --max-time 3 http://127.0.0.1:9111/workspace/api/documents >/dev/null \
+  || { echo '工作空间未就绪；查看 journalctl -u canvas-workspace' >&2; exit 1; }
 
 # Replace only the old canvas/library page routes; keep the installed site settings.
 cp "$SITE" "$SITE.before-workspace-$STAMP"

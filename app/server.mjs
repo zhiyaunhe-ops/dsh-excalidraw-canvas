@@ -11,7 +11,7 @@ const blank = () => ({ type: 'excalidraw', version: 2, source: 'dsh-canvas', ele
 const stable = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
-export async function createWorkspace({ root, upstream, expandElements = elements => elements, renderScene } = {}) {
+export async function createWorkspace({ root, upstream, mode = 'cloud', expandElements = elements => elements, renderScene } = {}) {
   const drawings = path.join(root, 'drawings');
   await mkdir(drawings, { recursive: true });
   const stateFile = path.join(root, '.active-canvas.json');
@@ -80,7 +80,6 @@ export async function createWorkspace({ root, upstream, expandElements = element
   const wss = new WebSocketServer({ server, path: '/workspace/events' });
   const broadcast = message => { for (const client of wss.clients) if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(message)); };
   async function captureAgentChanges() {
-    refreshTimer = null;
     if (!activeId) return;
     const previous = await read(activeId);
     const live = await upstreamScene();
@@ -112,11 +111,15 @@ export async function createWorkspace({ root, upstream, expandElements = element
     socket = new WebSocket(upstream.replace(/^http/, 'ws'));
     socket.on('open', () => { upstreamConnected = true; broadcast({ type: 'connection', connected: true }); });
     socket.on('message', data => {
+      if (closed) return;
       const message = JSON.parse(data.toString());
       if (message.type === 'set_viewport' || message.type === 'export_image_request') { broadcast(message); return; }
       if (internalWrite || message.type === 'sync_status') return;
       clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => serialized(captureAgentChanges).catch(error => console.error('Agent save:', error.message)), 180);
+      refreshTimer = setTimeout(() => {
+        refreshTimer = null;
+        if (!closed) serialized(captureAgentChanges).catch(error => console.error('Agent save:', error.message));
+      }, 180);
     });
     socket.on('error', error => console.error('Canvas upstream:', error.message));
     socket.on('close', () => {
@@ -144,6 +147,14 @@ export async function createWorkspace({ root, upstream, expandElements = element
     client.send(JSON.stringify({ type: 'active', id: activeId }));
   });
   app.use(express.json({ limit: '25mb' }));
+  app.get('/workspace/runtime.js', (_req, res) => res.type('js').set('Cache-Control', 'no-store').send(`window.CANVAS_RUNTIME=${JSON.stringify({ mode })};`));
+  // Native viewport/image responses also work without nginx in Desktop mode.
+  for (const endpoint of ['/api/viewport/result', '/api/export/image/result']) app.post(endpoint, async (req, res, next) => {
+    try {
+      const response = await fetch(upstream + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body) });
+      res.status(response.status).type('json').send(await response.text());
+    } catch (error) { next(error); }
+  });
   app.use('/workspace/api', (_req, res, next) => { res.set('Cache-Control', 'no-store'); next(); });
   const route = fn => (req, res, next) => serialized(() => fn(req, res)).catch(next);
   function sessionKey(value) {

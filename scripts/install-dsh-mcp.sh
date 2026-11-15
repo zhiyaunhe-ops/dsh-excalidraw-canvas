@@ -6,18 +6,26 @@ set -euo pipefail
 PROFILE="${1:-web}"
 PORT="${EXCALIDRAW_PORT:-3000}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PATCH="$HOME/.dsh/profiles/$PROFILE/cordis.patch.yml"
+PROFILE_DIR="$HOME/.dsh/profiles/$PROFILE"
+PATCH="$PROFILE_DIR/cordis.patch.yml"
 
 log() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31merror\033[0m %s\n' "$*" >&2; exit 1; }
 
-[ -d "$HOME/.dsh/profiles/$PROFILE" ] || die "没有 profile 目录：$HOME/.dsh/profiles/$PROFILE"
+[ -f "$PROFILE_DIR/package.json" ] || die "profile 未初始化：$PROFILE_DIR；先启动并配置 DSH web"
 command -v dsh >/dev/null 2>&1 || die "找不到 dsh 命令"
 
 NODE_BIN="$(command -v node)"
 NPM_ROOT="$(npm root -g)"
 MCP_ENTRY="$NPM_ROOT/mcp-excalidraw-server/dist/index.js"
 [ -f "$MCP_ENTRY" ] || die "找不到 $MCP_ENTRY，先跑 install.sh"
+
+# This is a plain host plugin dependency, not an installable DSH bundle.
+if [ ! -f "$PROFILE_DIR/node_modules/@deepseek-ai/dsh-mcp-client/package.json" ]; then
+  command -v pnpm >/dev/null || die "缺少 pnpm，无法安装 profile 的 MCP client 依赖"
+  log "安装 web profile 的 MCP client 依赖"
+  pnpm --dir "$PROFILE_DIR" add --save-exact @deepseek-ai/dsh-mcp-client@0.2.1-rc.2
+fi
 
 touch "$PATCH"
 if grep -q "id: mcp-excalidraw" "$PATCH"; then

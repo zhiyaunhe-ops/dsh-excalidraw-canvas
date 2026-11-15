@@ -55,7 +55,7 @@ export function apply(ctx, config = {}) {
       const requested = path.resolve(execution.arguments.filePath);
       const destination = path.join(realpathSync(path.dirname(requested)), path.basename(requested));
       const drawings = realpathSync(path.join(root, 'drawings'));
-      if (destination.startsWith(drawings + path.sep)) throw new Error('云端画布由工作空间自动保存。导出副本请使用单独的导出目录，不能用 export_scene / export_to_image 覆写云端画布文件。');
+      if (destination.startsWith(drawings + path.sep)) throw new Error('工作空间画布由工作空间自动保存。导出副本请使用单独的导出目录，不能用 export_scene / export_to_image 覆写工作空间画布文件。');
     }
     const run = await request('/assistant/tool-runs', { sessionId: context.sessionId }, execution.signal);
     activeRuns.add(run.id);
@@ -72,7 +72,7 @@ export function apply(ctx, config = {}) {
     output: { schema: { type: 'object', additionalProperties: true }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
     execute,
   });
-  tool('canvas_list', '列出云端 Excalidraw 画布及 ID。不会切换或修改画布。', {}, [], async (_args, execution) => request('/documents', undefined, execution.signal));
+  tool('canvas_list', '列出工作空间 Excalidraw 画布及 ID。不会切换或修改画布。', {}, [], async (_args, execution) => request('/documents', undefined, execution.signal));
   tool('canvas_select', '给尚未绑定的当前助手会话绑定一张画布。每个会话固定对应一张画布，不会切换浏览器当前画布。', { canvasId: { type: 'string', description: '从 canvas_list 读取的目标画布 ID' } }, ['canvasId'], async ({ canvasId }, execution) => {
     if (!execution.agent) throw new Error('缺少助手会话');
     const inherited = contextOf(execution.agent);
