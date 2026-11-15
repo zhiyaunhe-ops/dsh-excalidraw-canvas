@@ -1,0 +1,6 @@
+url: https://github.com/zhiyaunhe-ops/dsh-excalidraw-canvas
+name: zhiyaunhe-ops/dsh-excalidraw-canvas
+category: tools
+description:
+  en: Connects a separately deployed cloud Excalidraw workspace to DSH with persistent canvas sessions and document-scoped editing.
+  zh: 将独立部署的云端 Excalidraw 工作空间接入 DSH，保留画布会话状态并限定每个会话的编辑目标。

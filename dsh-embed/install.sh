@@ -77,7 +77,11 @@ YAML
   log "已把插件条目写入 $PATCH（host 会热加载，无需重启 dsh-web）"
 fi
 
-# 5) 收尾检查
+# 5) 云端工作空间
+CANVAS_SITE="$SITE" "$HERE/../scripts/install-workspace.sh"
+CANVAS_SITE="$SITE" "$HERE/../scripts/install-session-scope.sh"
+
+# 6) 收尾检查
 systemctl reload nginx
 sleep 1
 curl -fsS --max-time 3 "http://127.0.0.1:9110/healthz" >/dev/null \

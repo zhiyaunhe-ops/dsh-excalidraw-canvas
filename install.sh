@@ -112,6 +112,8 @@ done
 curl -fsS --max-time 3 "http://127.0.0.1:$PORT/health" >/dev/null || die "画布没有在 127.0.0.1:$PORT 起来，看 systemctl status excalidraw-canvas"
 curl -fsS --max-time 5 "https://$DOMAIN/healthz" >/dev/null || warn "公网 /healthz 不通，检查 DNS 和防火墙"
 
+CANVAS_SITE="/etc/nginx/sites-available/$SITE_NAME.conf" "$REPO_DIR/scripts/install-workspace.sh"
+
 cat <<EOF
 
 ============================================================

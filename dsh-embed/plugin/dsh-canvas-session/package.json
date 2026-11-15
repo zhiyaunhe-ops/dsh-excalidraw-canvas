@@ -1,6 +1,6 @@
 {
   "name": "dsh-canvas-session",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Bind an embedded canvas panel to one dsh session per canvas (画布库 workspace)",
   "type": "module",
@@ -8,7 +8,8 @@
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./host": "./host.js"
   },
   "dsh": {
     "client": {
@@ -21,6 +22,8 @@
   },
   "files": [
     "index.js",
+    "host.js",
+    "context.js",
     "client.js"
   ]
 }

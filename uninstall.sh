@@ -7,6 +7,10 @@ die() { printf '\033[1;31merror\033[0m %s\n' "$*" >&2; exit 1; }
 
 [ "$(id -u)" -eq 0 ] || die "请用 sudo 运行"
 
+echo "==> 停用画布工作空间"
+systemctl disable --now canvas-workspace.service 2>/dev/null || true
+rm -f /etc/systemd/system/canvas-workspace.service
+
 echo "==> 停用 excalidraw-canvas 服务"
 systemctl disable --now excalidraw-canvas.service 2>/dev/null || true
 rm -f /etc/systemd/system/excalidraw-canvas.service

@@ -1,7 +1,7 @@
-# dsh 小窗：在画布页里直接对话
+# dsh 助手：在云端画布里直接对话
 
-在画布页右下角挂一个 dsh 对话面板，**一张画布一个会话**，工作区固定在画布库目录
-（`/var/www/canvas-library/drawings`，即 `~/canvases`）。点「载入画布」切到别的图，
+编辑页顶部「助手」打开 dsh 对话侧栏，**一张画布一个会话**，工作区固定在画布库目录
+（`/var/www/canvas-library/drawings`，即 `~/canvases`）。从画布库打开另一张图时，
 小窗会自动换成那张图的会话。
 
 ```
@@ -38,7 +38,7 @@ dsh web 每次启动打印一个一次性的 `?token=` 登录链接，只出现�
 
 ## 一画布一 session 插件
 
-`plugin/dsh-canvas-session` 是一个 **dsh 浏览器端插件**（纯 UI，没有 host 侧逻辑）。
+`plugin/dsh-canvas-session` 包含浏览器会话入口与 host 范围插件。浏览器端负责找/建会话并将 session ID 与 canvas ID 注册到工作空间；`host.js` 负责每轮上下文和 Excalidraw 工具的固定目标。
 
 - `package.json` 的 `dsh.client.platform = "web"`，`exports["./client"]` 指向浏览器包；
 - `client.js` 是 `window.__ModuleLoader__.load({...})` 形式的 cordis 插件，
@@ -92,7 +92,18 @@ sudo ./dsh-embed/install.sh
 
 ## 已知限制
 
-- 画布状态在服务进程内存里，**重启 excalidraw-canvas 就是一张白纸**；要留住就
-  `canvas-save <名字>`，或在画布库点「载入画布」。
+- 云端工作空间负责自动落盘并恢复当前文档；单个 MCP 服务同时对应一张当前画布。其他窗口切换画布后，可在编辑页重新连接助手。
 - 登录桥从 journal 抓 token，`dsh-web` 重启后旧 cookie 失效，需要点「重登」。
 - 会话映射存在浏览器 localStorage，换浏览器靠标题兜底；标题被手动改掉就会新建。
+
+## 新版界面与保存
+
+`install.sh` 现在也会安装 `../app/` 的云端工作空间。`web/embed.*` 与 `bin/canvas-library` 保留为旧版兼容资源，新版 `/library/` 由工作空间实时读取服务器文件，`/canvas/<id>` 是独立编辑地址。Ctrl/Cmd+S、自动保存和云端副本均由工作空间处理；下载从导出菜单进入。助手侧栏复用这里的登录桥和一画布一会话插件。新版由 App 持有按画布 ID 复用的常驻助手实例，新建/打开画布时就开始加载；收起侧栏与页面内切换不会销毁 iframe。整页刷新会重新初始化，已有会话仍按原映射恢复。
+
+## 会话编辑范围
+
+`host.js` 作为独立 `canvas-session-scope` 条目装进 profile，可热加载而不重启 dsh。浏览器必须先完成 `/workspace/api/assistant/bindings` 注册再打开会话。已有会话可用 `scripts/bind-existing-sessions.py` 从旧会话标题迁移绑定，脚本只读取日志，不修改聊天内容。
+
+绑定一旦存在，不随会话或画布改名改变。host 的 required prompt context 每轮读取该映射和对应 `.excalidraw` 文件的最新名称与版本，包含地址、路径和范围说明。子会话沿 parentSession 继承绑定；绑定目标已删除时不会自动落到其他画布。
+
+host 包裹 `mcp__excalidraw__*` 调用，开始前向工作空间领取工具运行记录，验证当前画布与会话目标一致。期间浏览器对同一画布的保存会稍后重试；打开其他图会排队至此次工具落盘结束。finally 中保存并释放，工具失败或取消也会释放。若窗口已切走，旧会话的下一次绘图调用会返回明确的目标不一致提示。这个范围控制用于 dsh 插件的绘图工具；它不改变主机通用文件或 shell 权限。MCP 导出到云端 drawings 目录（包含 ~/canvases 目录软链）会被拒绝；云端保存由工作空间负责，下载副本使用独立导出目录。

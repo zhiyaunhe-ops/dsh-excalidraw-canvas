@@ -1,0 +1,59 @@
+{
+  "name": "dsh-excalidraw-canvas",
+  "version": "0.3.0",
+  "description": "Connect a cloud Excalidraw workspace to DeepSeek Harness with persistent canvas sessions and document-scoped editing.",
+  "author": "zhiyaunhe-ops",
+  "license": "MIT",
+  "type": "module",
+  "main": "plugin/index.js",
+  "exports": {
+    ".": "./plugin/index.js",
+    "./host": "./plugin/host.js",
+    "./client": "./plugin/client.js",
+    "./package.json": "./package.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhiyaunhe-ops/dsh-excalidraw-canvas.git"
+  },
+  "homepage": "https://github.com/zhiyaunhe-ops/dsh-excalidraw-canvas#readme",
+  "bugs": {
+    "url": "https://github.com/zhiyaunhe-ops/dsh-excalidraw-canvas/issues"
+  },
+  "keywords": ["dsh-plugin", "deepseek-harness", "excalidraw", "canvas", "mcp"],
+  "engines": {
+    "node": ">=20",
+    "dsh": "0.2.1-rc.2"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.0.5",
+    "@deepseek-ai/schemastery": "~3.18.5",
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-system-prompt": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-api-session-controller": "0.2.1-rc.2",
+    "@deepseek-ai/dsh-client-ui-workspace": "0.2.1-rc.2"
+  },
+  "scripts": {
+    "build:plugin": "node scripts/build-plugin-client.mjs",
+    "prepack": "npm run build:plugin"
+  },
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "inject": ["@deepseek-ai/dsh-api-session-controller", "@deepseek-ai/dsh-client-ui-workspace"]
+    }
+  },
+  "files": [
+    "plugin/",
+    "cordis.patch.yml",
+    "scripts/build-plugin-client.mjs",
+    "dsh-embed/plugin/dsh-canvas-session/index.js",
+    "dsh-embed/plugin/dsh-canvas-session/client.js",
+    "dsh-embed/plugin/dsh-canvas-session/host.js",
+    "dsh-embed/plugin/dsh-canvas-session/context.js"
+  ],
+  "publishConfig": { "access": "public" }
+}

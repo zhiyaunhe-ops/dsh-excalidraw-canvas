@@ -15,8 +15,8 @@ window.__ModuleLoader__.load({
 		 *   - miss (or the session was deleted) → create a session inside the
 		 *     "画布库" workspace (the canvas store), remember its id, open it.
 		 *
-		 * Everything here rides public client services only (`sessions`,
-		 * `workspaces`, `uiWorkspace`), so no host-side wiring is needed.
+		 * The workspace persists the session/canvas mapping before opening the
+		 * chat. The host injects that target into every request and wraps tools.
 		 */
 		const INJECT = ["sessions", "workspaces", "uiWorkspace"];
 		const CANVAS_DIR = "/var/www/canvas-library/drawings";
@@ -68,6 +68,17 @@ window.__ModuleLoader__.load({
 				if (reason !== undefined) console.warn("[canvas-session]", reason);
 			};
 
+			const openBound = async (uiWorkspace, sessionId) => {
+				const response = await fetch('/workspace/api/assistant/bindings', {
+					method: 'POST', headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ sessionId, canvasId: stem }),
+				});
+				const result = await response.json();
+				if (!response.ok) throw new Error(result.error || '画布会话绑定失败');
+				uiWorkspace.openSession(sessionId);
+				window.parent.postMessage({ type: 'dsh-canvas-bound', canvasId: stem, sessionId, title: result.document.title }, window.location.origin);
+			};
+
 			const bind = async () => {
 				const sessions = ctx.get("sessions");
 				const workspaces = ctx.get("workspaces");
@@ -80,7 +91,7 @@ window.__ModuleLoader__.load({
 				const remembered = window.localStorage.getItem(storeKey);
 				const byId = list.byId ?? {};
 				if (remembered !== null && byId[remembered] !== undefined) {
-					uiWorkspace.openSession(remembered);
+					await openBound(uiWorkspace, remembered);
 					finish();
 					return;
 				}
@@ -92,7 +103,7 @@ window.__ModuleLoader__.load({
 					const row = byId[id];
 					if (row !== undefined && row !== null && row.title === title) {
 						window.localStorage.setItem(storeKey, id);
-						uiWorkspace.openSession(id);
+						await openBound(uiWorkspace, id);
 						finish();
 						return;
 					}
@@ -110,7 +121,7 @@ window.__ModuleLoader__.load({
 					// A rename refusal must not block the binding.
 					console.warn("[canvas-session] rename skipped:", error);
 				}
-				uiWorkspace.openSession(sessionId);
+				await openBound(uiWorkspace, sessionId);
 				finish();
 			};
 
