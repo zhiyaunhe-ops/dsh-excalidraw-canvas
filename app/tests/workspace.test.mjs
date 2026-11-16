@@ -15,7 +15,7 @@ const expandElements = process.env.MCP_EXCALIDRAW_EXPANDER
   ? (await import(pathToFileURL(process.env.MCP_EXCALIDRAW_EXPANDER).href)).expandElementsForExport
   : undefined;
 
-async function fixture(initial = { elements: [], files: {} }) {
+async function fixture(initial = { elements: [], files: {} }, workspaceOptions = {}) {
   const temp = await mkdtemp(path.join(os.tmpdir(), 'canvas-workspace-'));
   const app = express();
   app.use(express.json());
@@ -38,7 +38,7 @@ async function fixture(initial = { elements: [], files: {} }) {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const upstream = `http://127.0.0.1:${server.address().port}`;
   const startWorkspace = async () => {
-    const instance = await createWorkspace({ root: temp, upstream, expandElements, renderScene: async () => ({ data: '<svg />' }) });
+    const instance = await createWorkspace({ root: temp, upstream, expandElements, renderScene: async () => ({ data: '<svg />' }), ...workspaceOptions });
     await new Promise((resolve, reject) => {
       instance.server.once('listening', resolve);
       instance.server.once('error', reject);
@@ -264,6 +264,69 @@ test('flushes a pending agent edit when the workspace closes', async t => {
   assert.equal(after.body.document.revision, before.body.document.revision + 1);
 });
 
+test('runs different canvas calls concurrently and queues same-canvas calls through failures', async t => {
+  const entered = [];
+  const gates = new Map();
+  const createRuntime = async () => {
+    let scene = { elements: [], files: {} };
+    return {
+      async load(value) { scene = structuredClone(value); },
+      call(_name, args) {
+        entered.push(args.step);
+        return new Promise((resolve, reject) => gates.set(args.step, { resolve, reject, scene: () => scene, update: value => { scene = value; } }));
+      },
+      async scene() { return structuredClone(scene); },
+      async close() {},
+    };
+  };
+  const f = await fixture({ elements: [element('foreground-original')], files: {} }, { createRuntime });
+  t.after(f.close);
+  const foregroundId = (await f.request('/workspace/api/documents')).body.activeId;
+  const a = await f.send('POST', '/workspace/api/assistant/ensure', { sessionId: 'parallel-a' });
+  const b = await f.send('POST', '/workspace/api/assistant/ensure', { sessionId: 'parallel-b' });
+  const aId = a.body.canvasId;
+  const bId = b.body.canvasId;
+  assert.notEqual(aId, bId);
+  assert.equal((await f.request('/workspace/api/documents')).body.activeId, foregroundId);
+
+  const call = (sessionId, step) => f.send('POST', '/workspace/api/assistant/calls', { sessionId, name: 'test_tool', args: { step } });
+  const waitFor = async step => {
+    for (let attempt = 0; attempt < 100 && !entered.includes(step); attempt++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert(entered.includes(step), `runtime.call did not enter for ${step}`);
+  };
+  const aFirst = call('parallel-a', 'a-first');
+  await waitFor('a-first');
+  const aSecond = call('parallel-a', 'a-second');
+  const bFirst = call('parallel-b', 'b-first');
+  await waitFor('b-first');
+  assert.deepEqual(entered, ['a-first', 'b-first'], 'B should enter while A is blocked, but A’s second call must wait');
+
+  const foreground = await f.request(`/workspace/api/documents/${foregroundId}`);
+  const foregroundSave = await f.send('PUT', `/workspace/api/documents/${foregroundId}`, {
+    revision: foreground.body.document.revision,
+    scene: { ...foreground.body.scene, elements: [element('foreground-saved')] },
+  });
+  assert.equal(foregroundSave.response.status, 200);
+  assert.equal((await f.request('/workspace/api/documents')).body.activeId, foregroundId);
+
+  gates.get('a-first').reject(new Error('first A call failed'));
+  const failed = await aFirst;
+  assert.equal(failed.response.status, 500);
+  await waitFor('a-second');
+  assert.deepEqual(entered, ['a-first', 'b-first', 'a-second']);
+
+  gates.get('a-second').update({ elements: [element('a-second-saved')], files: {} });
+  gates.get('a-second').resolve({ content: [] });
+  gates.get('b-first').update({ elements: [element('b-first-saved')], files: {} });
+  gates.get('b-first').resolve({ content: [] });
+  const [aSaved, bSaved] = await Promise.all([aSecond, bFirst]);
+  assert.equal(aSaved.response.status, 200);
+  assert.equal(bSaved.response.status, 200);
+  assert.deepEqual((await f.request(`/workspace/api/documents/${aId}`)).body.scene.elements.map(item => item.id), ['a-second-saved']);
+  assert.deepEqual((await f.request(`/workspace/api/documents/${bId}`)).body.scene.elements.map(item => item.id), ['b-first-saved']);
+  assert.deepEqual((await f.request(`/workspace/api/documents/${foregroundId}`)).body.scene.elements.map(item => item.id), ['foreground-saved']);
+});
+
 test('persists one canvas binding per session and serializes agent edits against navigation', async t => {
   const f = await fixture({ elements: [element('canvas-a')], files: {} });
   t.after(f.close);
@@ -355,21 +418,30 @@ test('host prompts follow inherited bindings and read current title and revision
   let missingNext = false;
   await assert.rejects(host.execute({ name: 'mcp__excalidraw__edit', agent: host.agents.get('stale-session') }, async () => { missingNext = true; }), /已不存在/);
   assert.equal(missingNext, false);
-  assert.match(host.prompts.get('unbound-session').text(), /先调用 canvas_list/);
-  let unboundNext = false;
-  await assert.rejects(host.execute({ name: 'mcp__excalidraw__edit', agent: host.agents.get('unbound-session') }, async () => { unboundNext = true; }), /canvas_list \/ canvas_select/);
-  assert.equal(unboundNext, false);
+  assert.match(host.prompts.get('unbound-session').text(), /默认在后台新建独立画布/);
+  let unboundSession;
+  const unboundExecution = { name: 'mcp__excalidraw__edit', agent: host.agents.get('unbound-session'), arguments: {} };
+  await host.execute(unboundExecution, async () => {
+    unboundSession = unboundExecution.arguments.__dshCanvasSession;
+    return { ok: true };
+  });
+  assert.equal(unboundSession, 'unbound-session');
+  assert.equal((await f.request('/workspace/api/assistant/bindings/unbound-session')).body.canvasId !== undefined, true);
 
-  // A stale session keeps its own target and is refused after another canvas is opened.
+  // A session keeps its own target while another canvas is open in the foreground.
   const another = await f.send('POST', '/workspace/api/documents', { title: 'Canvas C', scene: { elements: [element('canvas-c')], files: {} } });
   const cId = another.body.document.id;
   await f.send('POST', `/workspace/api/documents/${cId}/open`, {});
-  let switchedNext = false;
-  await assert.rejects(host.execute({ name: 'mcp__excalidraw__edit', agent: host.agents.get('child-session') }, async () => { switchedNext = true; }), /只编辑|当前画布/);
-  assert.equal(switchedNext, false);
+  let switchedSession;
+  const switchedExecution = { name: 'mcp__excalidraw__edit', agent: host.agents.get('child-session'), arguments: {} };
+  await host.execute(switchedExecution, async () => {
+    switchedSession = switchedExecution.arguments.__dshCanvasSession;
+    return { ok: true };
+  });
+  assert.equal(switchedSession, 'parent-session');
 });
 
-test('host tool hook holds the target lock and always finishes after a tool error', async t => {
+test('host tool hook routes the explicit session marker and propagates tool failures', async t => {
   const f = await fixture({ elements: [element('canvas-a')], files: {} });
   t.after(f.close);
   await new Promise((resolve, reject) => {
@@ -384,24 +456,14 @@ test('host tool hook holds the target lock and always finishes after a tool erro
   const host = mockHost(f, [{ id: 'agent-a' }, { id: 'agent-b' }]);
   t.after(() => host.close());
 
-  f.live = { elements: [element('written-by-tool')], files: {} };
-  let insideHook = false;
-  await assert.rejects(host.execute({ name: 'mcp__excalidraw__edit', agent: host.agents.get('agent-a') }, async () => {
-    insideHook = true;
-    const lockedSave = await f.send('PUT', `/workspace/api/documents/${aId}`, { revision: 1, scene: { elements: [element('browser-change')], files: {} } });
-    assert.equal(lockedSave.response.status, 423);
-    const queuedOpen = await f.send('POST', `/workspace/api/documents/${bId}/open`, {});
-    assert.equal(queuedOpen.body.activationPending, true);
+  let routedSession;
+  const execution = { name: 'mcp__excalidraw__edit', agent: host.agents.get('agent-a'), arguments: {} };
+  await assert.rejects(host.execute(execution, async () => {
+    routedSession = execution.arguments.__dshCanvasSession;
     throw new Error('mock tool failure');
   }), /mock tool failure/);
-  assert.equal(insideHook, true);
-
-  const savedA = await f.request(`/workspace/api/documents/${aId}`);
-  assert.equal(savedA.body.scene.elements[0].id, 'written-by-tool');
-  assert.equal((await f.request('/workspace/api/documents')).body.activeId, bId);
-  const newToolRun = await f.send('POST', '/workspace/api/assistant/tool-runs', { sessionId: 'agent-b' });
-  assert.equal(newToolRun.response.status, 200);
-  await f.send('POST', `/workspace/api/assistant/tool-runs/${newToolRun.body.id}/finish`, {});
+  assert.equal(routedSession, 'agent-a');
+  assert.equal((await f.request('/workspace/api/documents')).body.activeId, aId);
 });
 
 test('rejects Excalidraw exports into drawings through a directory symlink but allows an export folder', async t => {

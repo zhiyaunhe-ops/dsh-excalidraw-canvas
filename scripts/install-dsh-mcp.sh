@@ -4,7 +4,6 @@
 set -euo pipefail
 
 PROFILE="${1:-web}"
-PORT="${EXCALIDRAW_PORT:-3000}"
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROFILE_DIR="$HOME/.dsh/profiles/$PROFILE"
 PATCH="$PROFILE_DIR/cordis.patch.yml"
@@ -17,8 +16,17 @@ command -v dsh >/dev/null 2>&1 || die "找不到 dsh 命令"
 
 NODE_BIN="$(command -v node)"
 NPM_ROOT="$(npm root -g)"
-MCP_ENTRY="$NPM_ROOT/mcp-excalidraw-server/dist/index.js"
-[ -f "$MCP_ENTRY" ] || die "找不到 $MCP_ENTRY，先跑 install.sh"
+MCP_ENTRY="$REPO_DIR/app/mcp-router.mjs"
+[ -f "$NPM_ROOT/mcp-excalidraw-server/dist/index.js" ] || die "先跑 install.sh 准备画布服务"
+[ -f "$REPO_DIR/app/node_modules/@modelcontextprotocol/server/package.json" ] || die "先运行工作空间安装，准备 app 依赖"
+PUBLIC_URL="${CANVAS_PUBLIC_URL:-}"
+if [ -z "$PUBLIC_URL" ]; then
+  SITE="${CANVAS_SITE:-/etc/nginx/sites-available/excalidraw-canvas}"
+  [ -f "$SITE" ] || SITE="${SITE}.conf"
+  DOMAIN="$(awk '/server_name/ {print $2; exit}' "$SITE" 2>/dev/null | tr -d ';' || true)"
+  PUBLIC_URL="${DOMAIN:+https://$DOMAIN}"
+fi
+PUBLIC_URL="${PUBLIC_URL:-http://127.0.0.1:9111}"
 
 # This is a plain host plugin dependency, not an installable DSH bundle.
 if [ ! -f "$PROFILE_DIR/node_modules/@deepseek-ai/dsh-mcp-client/package.json" ]; then
@@ -28,31 +36,28 @@ if [ ! -f "$PROFILE_DIR/node_modules/@deepseek-ai/dsh-mcp-client/package.json" ]
 fi
 
 touch "$PATCH"
-if grep -q "id: mcp-excalidraw" "$PATCH"; then
-  log "$PATCH 里已有 mcp-excalidraw，跳过写入"
-else
-  cp "$PATCH" "$PATCH.bak-before-excalidraw"
-  log "备份到 $PATCH.bak-before-excalidraw"
-  [ -z "$(tail -c 1 "$PATCH")" ] || echo "" >> "$PATCH"
-  sed -e "s|__NODE_BIN__|$NODE_BIN|g" \
-      -e "s|__MCP_ENTRY__|$MCP_ENTRY|g" \
-      -e "s|__PORT__|$PORT|g" \
-      -e "s|__RUN_HOME__|$HOME|g" \
-      "$REPO_DIR/templates/cordis.patch.insert.yml.tpl" >> "$PATCH"
-  log "已追加 insert 条目"
-fi
+python3 - "$PATCH" "$REPO_DIR/templates/cordis.patch.insert.yml.tpl" "$NODE_BIN" "$MCP_ENTRY" "$HOME" "$PUBLIC_URL" <<'PY'
+from pathlib import Path
+import re, sys
+patch, template = map(Path, sys.argv[1:3])
+text = patch.read_text()
+rendered = template.read_text()
+for key, value in zip(('__NODE_BIN__', '__MCP_ENTRY__', '__RUN_HOME__', '__PUBLIC_URL__'), sys.argv[3:]):
+    rendered = rendered.replace(key, value)
+if 'id: mcp-excalidraw' in text:
+    block = rendered[rendered.index('    - id: mcp-excalidraw'):]
+    text, count = re.subn(r'(?m)^    - id: mcp-excalidraw\n(?: {6,}[^\n]*\n|[ \t]*\n)*', lambda _: block, text if text.endswith('\n') else text + '\n')
+    if count != 1: raise SystemExit('无法定位 mcp-excalidraw 配置块，请检查 profile patch 缩进')
+else:
+    text = text.rstrip() + '\n' + rendered
+if text != patch.read_text():
+    patch.with_name(patch.name + '.bak-before-excalidraw').write_text(patch.read_text())
+    patch.write_text(text)
+PY
+log "已接入按画布隔离的 MCP 路由"
 
 log "校验合成后的配置"
 dsh --profile "$PROFILE" --dump-config 2>&1 | grep -q "mcp-excalidraw" \
   || die "配置里没合成出 mcp-excalidraw，检查 $PATCH 的 YAML"
 
-SVC="dsh-$PROFILE"
-if systemctl list-unit-files 2>/dev/null | grep -q "^$SVC.service"; then
-  log "重启 $SVC"
-  sudo systemctl restart "$SVC"
-  sleep 3
-  ps -eo args --no-headers | grep -F "mcp-excalidraw-server/dist/index.js" | grep -v grep >/dev/null \
-    && log "MCP 子进程已在运行" || printf '\033[1;33m warn\033[0m 没看到 MCP 子进程，看 journalctl -u %s\n' "$SVC"
-else
-  log "没有 $SVC 服务，手动重启你的 dsh 会话生效"
-fi
+log "运行中的 DSH 会热加载 MCP 配置，无需重启助手或整个 dsh 服务"

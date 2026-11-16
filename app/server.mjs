@@ -1,17 +1,19 @@
 import express from 'express';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer } from 'node:http';
-import { mkdir, readFile, writeFile, rename, readdir, stat, unlink } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, readdir, stat, unlink, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { createCanvasRuntime } from './canvas-runtime.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const blank = () => ({ type: 'excalidraw', version: 2, source: 'dsh-canvas', elements: [], appState: { viewBackgroundColor: '#ffffff', gridSize: null }, files: {} });
 const stable = value => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a], [b]) => a.localeCompare(b))) : item);
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
-export async function createWorkspace({ root, upstream, mode = 'cloud', expandElements = elements => elements, renderScene } = {}) {
+export async function createWorkspace({ root, upstream, mode = 'cloud', expandElements = elements => elements, renderScene, packageDir = path.dirname(createRequire(import.meta.url).resolve('mcp-excalidraw-server/package.json')), createRuntime = createCanvasRuntime } = {}) {
   const drawings = path.join(root, 'drawings');
   await mkdir(drawings, { recursive: true });
   const stateFile = path.join(root, '.active-canvas.json');
@@ -31,6 +33,16 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
   let queue = Promise.resolve();
   const serialized = fn => { const job = queue.then(fn); queue = job.catch(() => {}); return job; };
   const previews = new Map();
+  const runtimes = new Map();
+  const canvasQueues = new Map();
+  const editing = new Set();
+  function onCanvas(id, operation) {
+    const job = (canvasQueues.get(id) || Promise.resolve()).then(operation);
+    const tail = job.catch(() => {});
+    canvasQueues.set(id, tail);
+    tail.then(() => { if (canvasQueues.get(id) === tail) canvasQueues.delete(id); });
+    return job;
+  }
   const fileFor = id => {
     if (!id || path.basename(id) !== id || id === '.' || id === '..') throw fail(400, '画布名称无效');
     return path.join(drawings, `${id}.excalidraw`);
@@ -80,7 +92,7 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
   const wss = new WebSocketServer({ server, path: '/workspace/events' });
   const broadcast = message => { for (const client of wss.clients) if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(message)); };
   async function captureAgentChanges() {
-    if (!activeId) return;
+    if (!activeId || runtimes.has(activeId)) return;
     const previous = await read(activeId);
     const live = await upstreamScene();
     const previousLive = { elements: expandElements(previous.elements.filter(el => !el.isDeleted), { deterministic: true }), files: previous.files || {} };
@@ -167,6 +179,92 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
     const { document: info } = await document(canvasId);
     return { sessionId, canvasId, document: info, filePath: fileFor(canvasId), activeId };
   }
+  async function ensureCanvas(sessionId, title) {
+    if (bindings[sessionId]) return bindingContext(sessionId);
+    const canvasId = `canvas-${randomUUID().slice(0, 12)}`;
+    const result = await persist(canvasId, { ...blank(), name: title?.trim() || '助手画布', canvasMeta: { revision: 1 } });
+    bindings[sessionId] = canvasId;
+    await atomicWrite(bindingsFile, bindings);
+    broadcast({ type: 'created', document: result.document });
+    return bindingContext(sessionId);
+  }
+  app.post('/workspace/api/assistant/ensure', route(async (req, res) => {
+    res.json(await ensureCanvas(sessionKey(req.body.sessionId), req.body.title));
+  }));
+  // Only the document's own queue spans a tool invocation. No workspace-wide
+  // lock is held while an agent is drawing or rendering a different document.
+  app.post('/workspace/api/assistant/calls', async (req, res, next) => {
+    const cancelled = new AbortController();
+    res.once('close', () => { if (!res.writableEnded) cancelled.abort(); });
+    try {
+      const context = await serialized(() => {
+        cancelled.signal.throwIfAborted();
+        return ensureCanvas(sessionKey(req.body.sessionId), req.body.title);
+      });
+      const id = context.canvasId;
+      const result = await onCanvas(id, async () => {
+        cancelled.signal.throwIfAborted();
+        editing.add(id);
+        broadcast({ type: 'assistant-editing', canvasId: id, editing: true });
+        let runtime;
+        let loaded = false;
+        try {
+          const scene = await serialized(async () => {
+            if (id === activeId && refreshTimer && upstreamConnected) { clearTimeout(refreshTimer); await captureAgentChanges(); }
+            return read(id);
+          });
+          if (['export_scene', 'export_to_image'].includes(req.body.name) && req.body.args?.filePath) {
+            const target = path.resolve(req.body.args.filePath);
+            const destination = path.join(await realpath(path.dirname(target)), path.basename(target));
+            if (destination.startsWith(await realpath(drawings) + path.sep)) throw fail(400, '工作空间画布自动保存；导出副本不能覆写 drawings 目录中的图纸');
+          }
+          if (!runtimes.has(id)) {
+            const starting = createRuntime({ packageDir, onEvent: event => broadcast({ ...event, canvasId: id }) });
+            runtimes.set(id, starting);
+            starting.catch(() => runtimes.delete(id));
+          }
+          runtime = await runtimes.get(id);
+          cancelled.signal.throwIfAborted();
+          await runtime.load(scene);
+          loaded = true;
+          cancelled.signal.throwIfAborted();
+          return await runtime.call(req.body.name, req.body.args || {});
+        } finally {
+          try {
+            if (loaded) {
+              const live = await runtime.scene();
+              await serialized(async () => {
+                const previous = await read(id);
+                if (stable(live) !== stable({ elements: expandElements(previous.elements.filter(element => !element.isDeleted), { deterministic: true }), files: previous.files || {} })) {
+                  const saved = await persist(id, { ...previous, ...live, canvasMeta: { ...previous.canvasMeta, revision: (previous.canvasMeta?.revision || 0) + 1 } });
+                  broadcast({ type: 'scene', ...saved, source: 'agent' });
+                  // Keep the old single-canvas URL usable without ever changing
+                  // which document the user is viewing.
+                  if (id === activeId && upstreamConnected) {
+                    try { await replaceUpstream(saved.scene); }
+                    catch (error) { console.error('Legacy canvas sync:', error.message); upstreamConnected = false; socket?.terminate(); }
+                  }
+                }
+              });
+            }
+          } finally {
+            editing.delete(id);
+            broadcast({ type: 'assistant-editing', canvasId: id, editing: false });
+          }
+        }
+      });
+      res.json({ result, document: (await document(id)).document, url: `/canvas/${encodeURIComponent(id)}` });
+    } catch (error) { next(error); }
+  });
+  app.post('/workspace/api/documents/:id/frontend/:kind', async (req, res, next) => {
+    try {
+      const runtime = await runtimes.get(req.params.id);
+      if (!runtime || !['viewport', 'image'].includes(req.params.kind)) throw fail(404, '画布执行环境未运行');
+      const endpoint = req.params.kind === 'viewport' ? '/api/viewport/result' : '/api/export/image/result';
+      const response = await fetch(runtime.upstream + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body) });
+      res.status(response.status).type('json').send(await response.text());
+    } catch (error) { next(error); }
+  });
   app.post('/workspace/api/assistant/bindings', route(async (req, res) => {
     const sessionId = sessionKey(req.body.sessionId);
     const canvasId = req.body.canvasId;
@@ -218,7 +316,7 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
   app.post('/workspace/api/documents/:id/open', route(async (req, res) => res.json(await activate(req.params.id))));
   app.put('/workspace/api/documents/:id', route(async (req, res) => {
     const id = req.params.id;
-    if (toolRun && id === toolRun.canvasId) throw fail(423, '助手正在编辑这张画布，本地更改会在该操作结束后自动保存');
+    if (editing.has(id) || (toolRun && id === toolRun.canvasId)) throw fail(423, '助手正在编辑这张画布，本地更改会在该操作结束后自动保存');
     if (id === activeId && refreshTimer && upstreamConnected) { clearTimeout(refreshTimer); await captureAgentChanges(); }
     const previous = await read(id);
     const revision = previous.canvasMeta?.revision || 0;
@@ -245,12 +343,16 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
     res.json(result);
   }));
   app.delete('/workspace/api/documents/:id', route(async (req, res) => {
+    if (canvasQueues.has(req.params.id)) throw fail(423, '助手正在编辑这张画布，请结束操作后再删除');
     if (req.params.id === pendingActivation) throw fail(423, '这张画布正在等待打开，请切换后再删除');
     if (req.params.id === activeId) throw fail(409, '请先打开另一张画布，再删除当前正在使用的画布');
     await read(req.params.id);
     await unlink(fileFor(req.params.id));
     for (const extension of ['.png', '.svg']) await unlink(path.join(drawings, req.params.id + extension)).catch(error => { if (error.code !== 'ENOENT') throw error; });
     previews.delete(req.params.id);
+    const runtime = await runtimes.get(req.params.id);
+    if (runtime) { await runtime.close(); runtimes.delete(req.params.id); }
+    broadcast({ type: 'deleted', id: req.params.id });
     res.json({ success: true });
   }));
   // Preview rendering is read-only and does not replace the live canvas.
@@ -281,7 +383,14 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
   app.use((error, _req, res, _next) => { console.error(error.message); res.status(error.status || 500).json({ error: error.message }); });
   return {
     server,
-    async close() { closed = true; clearTimeout(refreshTimer); clearTimeout(reconnectTimer); if (refreshTimer && upstreamConnected) await serialized(captureAgentChanges); socket?.terminate(); for (const client of wss.clients) client.terminate(); await queue; await new Promise(resolve => server.close(resolve)); },
+    async close() {
+      closed = true; clearTimeout(refreshTimer); clearTimeout(reconnectTimer);
+      await Promise.all(canvasQueues.values());
+      if (refreshTimer && upstreamConnected) await serialized(captureAgentChanges);
+      await Promise.all([...runtimes.values()].map(async pending => { const runtime = await pending; await runtime.close(); }));
+      socket?.terminate(); for (const client of wss.clients) client.terminate(); await queue;
+      await new Promise(resolve => server.close(resolve));
+    },
   };
 }
 
@@ -289,7 +398,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const pkg = process.env.EXCALIDRAW_PACKAGE_DIR;
   const { expandElementsForExport } = await import(pathToFileURL(path.join(pkg, 'dist/core/expand-elements.js')));
   const { renderScene } = await import(pathToFileURL(path.join(pkg, 'dist/core/render/index.js')));
-  const workspace = await createWorkspace({ root: process.env.CANVAS_LIBRARY_DIR || '/var/www/canvas-library', upstream: process.env.EXPRESS_SERVER_URL || 'http://127.0.0.1:3000', expandElements: expandElementsForExport, renderScene });
+  const workspace = await createWorkspace({ root: process.env.CANVAS_LIBRARY_DIR || '/var/www/canvas-library', upstream: process.env.EXPRESS_SERVER_URL || 'http://127.0.0.1:3000', packageDir: pkg, expandElements: expandElementsForExport, renderScene });
   workspace.server.listen(Number(process.env.PORT || 9111), '127.0.0.1', () => console.log('Canvas workspace listening'));
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, async () => { await workspace.close(); process.exit(0); });
 }

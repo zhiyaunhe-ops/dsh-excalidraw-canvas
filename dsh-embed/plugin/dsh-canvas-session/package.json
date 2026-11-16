@@ -1,8 +1,8 @@
 {
   "name": "dsh-canvas-session",
-  "version": "0.2.0",
+  "version": "0.5.0",
   "private": true,
-  "description": "Bind an embedded canvas panel to one dsh session per canvas (画布库 workspace)",
+  "description": "Per-session targets for independently running Excalidraw canvases",
   "type": "module",
   "main": "index.js",
   "exports": {

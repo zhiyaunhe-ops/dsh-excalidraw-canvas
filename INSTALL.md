@@ -47,7 +47,11 @@ npm run desktop:config
 
 使用 npm 安装的普通 `dsh` CLI 不负责 Desktop profile，别用 `dsh --profile desktop ...` 初始化或改写它。Desktop 的配置与插件操作使用应用内管理器；[官方 Desktop 说明](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md#bundled-command-runtime) 解释了应用自带命令与 npm CLI 的区别。
 
-### A3. 绑定并使用助手
+### A3. 使用独立画布，或明确绑定已有画布
+
+**新的绘图任务直接在一个新的 Desktop 对话中提出即可。** 首次调用画布工具会后台创建并绑定独立画布，也可以让 agent 调用 `canvas_create` 命名。其他 agent 同时绘图时，各用各的执行环境，不需要用户切换页面。
+
+下面的绑定步骤只用于用户明确想修改网页中这张已有图的情况：
 
 1. 在本机画布库新建或打开一张图。
 2. 点击编辑页「助手」，复制其中的绑定指令，发送到一个新的 DSH Desktop 对话。
@@ -139,9 +143,9 @@ sudo env PATH="$PATH" ./install.sh canvas.example.com
 ./scripts/install-dsh-mcp.sh web
 ```
 
-脚本在 profile 中补齐 `@deepseek-ai/dsh-mcp-client@0.2.1-rc.2`，追加 MCP 配置，再校验合成配置。若存在 `dsh-web` systemd 服务，会自动重启它使连接生效。这一步会中断当时的 DSH 工作，选没有任务运行时执行。
+脚本在 profile 中补齐 `@deepseek-ai/dsh-mcp-client@0.2.1-rc.2`，新增或更新 `mcp-excalidraw` 配置，再校验合成配置。运行中的 DSH 会热加载这个 MCP 条目，无需重启整个 DSH 服务，其他对话继续保留。
 
-Excalidraw MCP 的配置必须保持 `serverName: excalidraw`、`EXCALIDRAW_NO_AUTOSTART: "1"`，并将 `EXPRESS_SERVER_URL` 指到 B2 的实时画布地址。实时画布由 systemd 运行，MCP 只连接它。
+MCP 配置保持 `serverName: excalidraw`，入口使用本仓库 `app/mcp-router.mjs`，环境变量 `CANVAS_WORKSPACE_URL=http://127.0.0.1:9111`。可用 `CANVAS_PUBLIC_URL` 指定对外画布地址；脚本默认从 nginx 站点读取。路由保留原 Excalidraw 工具和图片输出，按 agent 会话选择独立画布执行环境。不要再把 stdio 入口直接指向上游 `dist/index.js`，那条旧路径仍只操作共享的当前画布。
 
 ### B4. 选择插件接线方式
 
@@ -204,7 +208,7 @@ sudo env PATH="$PATH" ./scripts/install-workspace.sh
 
 该命令构建并重启工作空间，不重启实时画布或 DSH。首次迁移会备份画布库，站点配置修改前也会备份；日常备份仍需自行保存整个 `/var/www/canvas-library/`。
 
-源码插件升级再执行 `sudo env PATH="$PATH" ./scripts/install-session-scope.sh`，它热加载上下文和工具绑定，不重启 DSH。bundle 接线通过插件管理器更新 bundle。不要为日常升级重跑根目录 `install.sh`，它会重建站点并重启实时画布。
+从 0.4.x 升级到独立画布路由时，还需执行 `./scripts/install-dsh-mcp.sh web` 更新 MCP 入口。源码插件升级再执行 `sudo env PATH="$PATH" ./scripts/install-session-scope.sh`，它热加载上下文和工具绑定，不重启 DSH。bundle 接线通过插件管理器更新 bundle。不要为日常升级重跑根目录 `install.sh`，它会重建站点并重启实时画布。
 
 卸载服务与助手桥：
 
@@ -221,9 +225,9 @@ sudo ./uninstall.sh --with-embed
 | Desktop 页面打不开 | 确认插件 `mode=desktop`、仓库完成 `setup:desktop`、`desktopDirectory` 仍存在；查看插件启动日志及本机端口 |
 | Desktop 报端口占用 | 结束独立的 `npm run desktop`；每套端口只运行一个实例 |
 | Desktop 安装器拒绝 DSH 版本 | 对照插件 manifest 的 `engines.dsh`；不要用 npm CLI 强行初始化 Desktop profile |
-| 助手没有 Excalidraw 工具 | Desktop 查看插件的 MCP 启动日志；云端确认 B3 成功且 `dsh-web` 已重启 |
-| 工具提示会话未绑定 | 使用 `canvas_list` 获取 ID，再 `canvas_select`；Desktop 也可复制画布页的绑定指令 |
-| 工具提示目标与当前画布不一致 | 打开绑定画布并点击「让助手连接这张画布」；另一张图使用另一个对话 |
+| 助手没有 Excalidraw 工具 | Desktop 查看插件的 MCP 启动日志；云端确认 B3 成功、MCP 条目已热加载且入口为 `app/mcp-router.mjs` |
+| 新 agent 要开始绘图 | 直接调用绘图工具会后台创建独立画布，或使用 `canvas_create` 命名；只有修改已有图时才用 `canvas_select` |
+| 仍提示目标与当前画布不一致 | 这是旧的全局画布接线；更新工作空间、MCP 入口及范围插件。不需要用户切换画布来让后台任务继续 |
 | 云端助手打不开 | 确认同源 `/dsh/` 代理、`dsh-web:8790` 和登录桥 `9110` 均可用；点「重新连接」 |
 | 云端安装显示 profile 未初始化 | 先完成 B1，以运行 DSH 的同一个用户执行 B3/B4 |
 | 源码接线和 bundle 冲突 | 按 B4 选一种并清理另一种的插件条目，保留画布与绑定文件 |

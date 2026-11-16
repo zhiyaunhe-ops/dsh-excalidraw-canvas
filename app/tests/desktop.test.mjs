@@ -49,8 +49,8 @@ test('desktop startup saves and restores a document while releasing its ephemera
   assert.equal(desktop.libraryDir, root);
   assert.equal(desktop.mcp.serverName, 'excalidraw');
   assert.equal(desktop.mcp.transport, 'stdio');
-  assert.equal(desktop.mcp.env.EXPRESS_SERVER_URL, `http://127.0.0.1:${canvasPort}`);
-  assert.equal(desktop.mcp.env.EXCALIDRAW_NO_AUTOSTART, '1');
+  assert.equal(desktop.mcp.args[0], path.join(repoRoot, 'app/mcp-router.mjs'));
+  assert.equal(desktop.mcp.env.CANVAS_WORKSPACE_URL, desktop.url);
   assert.equal(desktop.mcp.failOnStartupError, false);
   const runtime = await fetch(`${desktop.url}/workspace/runtime.js`);
   assert.match(await runtime.text(), /CANVAS_RUNTIME=\{"mode":"desktop"\}/);
@@ -113,7 +113,7 @@ test('host desktop mode starts the workspace, wires MCP, and registers cleanup',
   await writeFile(path.join(schemaDir, 'index.js'), `const chain = () => ({ default() { return this; }, description() { return this; } });\nexport default { object(value) { return value; }, union: chain, string: chain, number: chain };\n`);
   await writeFile(path.join(mcpDir, 'package.json'), '{"type":"module","exports":"./index.js"}');
   await writeFile(path.join(mcpDir, 'index.js'), 'export function apply() {}\n');
-  await writeFile(path.join(scriptsDir, 'desktop.mjs'), `export function desktopOptions() { return { root: '/default', canvasPort: 3130, workspacePort: 9112 }; }\nexport async function startDesktop(options) { globalThis.__canvasDesktopStarted = options; return { url: 'http://127.0.0.1:49112', libraryDir: options.root, mcp: { serverName: 'excalidraw', transport: 'stdio', env: { EXPRESS_SERVER_URL: 'http://127.0.0.1:43130' } }, close: async () => { globalThis.__canvasDesktopClosed = true; } }; }\n`);
+  await writeFile(path.join(scriptsDir, 'desktop.mjs'), `export function desktopOptions() { return { root: '/default', canvasPort: 3130, workspacePort: 9112 }; }\nexport async function startDesktop(options) { globalThis.__canvasDesktopStarted = options; return { url: 'http://127.0.0.1:49112', libraryDir: options.root, mcp: { serverName: 'excalidraw', transport: 'stdio', args: ['/repo/app/mcp-router.mjs'], env: { CANVAS_WORKSPACE_URL: 'http://127.0.0.1:49112' } }, close: async () => { globalThis.__canvasDesktopClosed = true; } }; }\n`);
   const module = await import(new URL(`file://${path.join(pluginDir, 'host.js')}`).href + `?test=${Date.now()}`);
   const effects = [];
   const pluginCalls = [];
@@ -126,7 +126,8 @@ test('host desktop mode starts the workspace, wires MCP, and registers cleanup',
   assert.deepEqual(globalThis.__canvasDesktopStarted, { root: path.join(root, 'canvas-data'), canvasPort: 41130, workspacePort: 49112 });
   assert.equal(pluginCalls.length, 1);
   assert.equal(pluginCalls[0][1].serverName, 'excalidraw');
-  assert.equal(pluginCalls[0][1].env.EXPRESS_SERVER_URL, 'http://127.0.0.1:43130');
+  assert.equal(pluginCalls[0][1].args[0], '/repo/app/mcp-router.mjs');
+  assert.equal(pluginCalls[0][1].env.CANVAS_WORKSPACE_URL, 'http://127.0.0.1:49112');
   const stopDesktop = await effects[0]();
   await stopDesktop();
   assert.equal(globalThis.__canvasDesktopClosed, true);

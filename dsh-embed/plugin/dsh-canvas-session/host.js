@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
-import { readCanvasContext, canvasPrompt } from './context.js?v=0.2.0';
+import { readCanvasContext, canvasPrompt } from './context.js?v=0.5.0';
 
 export const name = 'dsh-canvas-session-scope';
 export const inject = ['agents', 'tools', 'systemPrompt'];
@@ -10,7 +10,6 @@ export function apply(ctx, config = {}) {
   const workspaceUrl = config.workspaceUrl || 'http://127.0.0.1:9111';
   const publicUrl = config.publicUrl || workspaceUrl;
   const decorated = new Map();
-  const activeRuns = new Set();
   function lineage(agent) {
     const ids = [];
     while (agent && !ids.includes(agent.id)) {
@@ -46,8 +45,12 @@ export function apply(ctx, config = {}) {
   ctx.on('tools/execute', async (execution, next) => {
     if (!execution.name.startsWith('mcp__excalidraw__')) return next();
     if (!execution.agent) throw new Error('画布工具缺少助手会话，无法确定编辑目标');
-    const context = contextOf(execution.agent);
-    if (!context) throw new Error('请先使用 canvas_list / canvas_select 绑定目标画布，再调用画布工具');
+    let context = contextOf(execution.agent);
+    if (!context) {
+      const ids = lineage(execution.agent);
+      await request('/assistant/ensure', { sessionId: ids.at(-1) }, execution.signal);
+      context = contextOf(execution.agent);
+    }
     if (context.missing) throw new Error(`绑定画布 ${context.canvasId} 已不存在，未执行任何画布操作`);
     // Export is a file write outside the REST canvas API. It must never
     // overwrite a cloud drawing (including through the ~/canvases symlink).
@@ -57,15 +60,10 @@ export function apply(ctx, config = {}) {
       const drawings = realpathSync(path.join(root, 'drawings'));
       if (destination.startsWith(drawings + path.sep)) throw new Error('工作空间画布由工作空间自动保存。导出副本请使用单独的导出目录，不能用 export_scene / export_to_image 覆写工作空间画布文件。');
     }
-    const run = await request('/assistant/tool-runs', { sessionId: context.sessionId }, execution.signal);
-    activeRuns.add(run.id);
-    try { return await next(); }
-    finally {
-      // Release even when the tool fails or its caller cancels. The caller's
-      // cancelled signal must not cancel saving and releasing this operation.
-      try { await request(`/assistant/tool-runs/${encodeURIComponent(run.id)}/finish`, {}, AbortSignal.timeout(15000)); }
-      finally { activeRuns.delete(run.id); }
-    }
+    // The transport routes by this injected session, never by the browser's
+    // foreground canvas. Each document executes in its own runtime.
+    execution.arguments = { ...execution.arguments, __dshCanvasSession: context.sessionId };
+    return next();
   });
   const tool = (name, description, properties, required, execute) => ctx.tools.register({
     name, description, parameters: { type: 'object', properties, required, additionalProperties: false },
@@ -73,22 +71,27 @@ export function apply(ctx, config = {}) {
     execute,
   });
   tool('canvas_list', '列出工作空间 Excalidraw 画布及 ID。不会切换或修改画布。', {}, [], async (_args, execution) => request('/documents', undefined, execution.signal));
+  tool('canvas_create', '为当前绘图任务在后台新建并绑定独立画布，不切换用户当前页面。已有绑定时返回原画布；独立会话互不占用，子任务继承父任务画布。', { title: { type: 'string', description: '新画布名称' } }, [], async ({ title }, execution) => {
+    if (!execution.agent) throw new Error('缺少助手会话');
+    const inherited = contextOf(execution.agent);
+    if (inherited) return request(`/assistant/bindings/${encodeURIComponent(inherited.sessionId)}`, undefined, execution.signal);
+    return request('/assistant/ensure', { sessionId: lineage(execution.agent).at(-1), title }, execution.signal);
+  });
   tool('canvas_select', '给尚未绑定的当前助手会话绑定一张画布。每个会话固定对应一张画布，不会切换浏览器当前画布。', { canvasId: { type: 'string', description: '从 canvas_list 读取的目标画布 ID' } }, ['canvasId'], async ({ canvasId }, execution) => {
     if (!execution.agent) throw new Error('缺少助手会话');
     const inherited = contextOf(execution.agent);
     if (inherited && inherited.canvasId !== canvasId) throw new Error(`本会话已绑定 ${inherited.canvasId}，请使用目标画布对应的助手会话`);
     return request('/assistant/bindings', { sessionId: inherited?.sessionId || execution.agent.id, canvasId }, execution.signal);
   });
-  tool('canvas_context', '读取本会话绑定画布的 ID、名称、路径、版本和是否为当前直播画布。', {}, [], async (_args, execution) => {
+  tool('canvas_context', '读取本会话独立绑定的画布 ID、名称、路径和保存版本；前台查看哪张图不影响编辑目标。', {}, [], async (_args, execution) => {
     if (!execution.agent) throw new Error('缺少助手会话');
     const context = contextOf(execution.agent);
     if (!context) throw new Error('本会话尚未绑定画布');
     return { ...context };
   });
-  ctx.effect(() => async () => {
+  ctx.effect(() => () => {
     for (const dispose of decorated.values()) dispose();
     decorated.clear();
-    await Promise.allSettled([...activeRuns].map(id => request(`/assistant/tool-runs/${encodeURIComponent(id)}/finish`, {}, AbortSignal.timeout(15000))));
   });
-  console.info('[canvas-session] Context injection and document-bound tools enabled');
+  console.info('[canvas-session] Independent canvas routing and background creation enabled');
 }

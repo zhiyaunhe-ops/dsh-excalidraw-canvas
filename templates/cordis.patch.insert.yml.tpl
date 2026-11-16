@@ -10,7 +10,7 @@
         args:
           - __MCP_ENTRY__
         env:
-          EXPRESS_SERVER_URL: http://127.0.0.1:__PORT__
-          EXCALIDRAW_NO_AUTOSTART: "1"
+          CANVAS_WORKSPACE_URL: http://127.0.0.1:9111
+          CANVAS_PUBLIC_URL: __PUBLIC_URL__
           EXCALIDRAW_EXPORT_DIR: __RUN_HOME__
         failOnStartupError: false

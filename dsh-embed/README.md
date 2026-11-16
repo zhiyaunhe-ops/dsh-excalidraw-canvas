@@ -44,9 +44,9 @@ nginx 将 `/dsh/` 代理到 DSH web，让 iframe 与画布页面同源。模板�
 
 权威绑定保存在 `/var/www/canvas-library/.assistant-bindings.json`。绑定完成后，重命名画布或会话不会改变编辑目标。浏览器 localStorage 用于定位会话，不能替代服务器的固定绑定。已有旧会话由 `scripts/bind-existing-sessions.py` 迁移，它只读取日志，不修改聊天内容。
 
-host 插件 `host.js` 每轮读取绑定文件与图纸，将 ID、名称、地址、路径和最新版本注入助手上下文。子会话沿 `parentSession` 继承目标。`mcp__excalidraw__*` 执行前核对当前画布，执行期间固定目标，结束后保存再释放；切换图纸会等这次工具完成。导出不能直接覆写工作空间的 drawings 文件。
+host 插件 `host.js` 每轮读取绑定文件与图纸，将 ID、名称、地址、路径和最新版本注入助手上下文。新的独立 agent 首次绘图会自动后台创建并绑定自己的画布；子会话沿 `parentSession` 继承父任务目标。调用时注入会话路由标记，经 `app/mcp-router.mjs` 发到工作空间，再由对应画布的独立 Worker 执行。不同图可以同时绘图，前台切换不会抢占其他图。导出不能直接覆写工作空间的 drawings 文件。
 
-普通 DSH 对话也可调用 `canvas_list`、`canvas_select`、`canvas_context`。一个会话固定对应一张画布；另一个目标使用另一个对话。单个 MCP 实时服务同时对应一张当前画布。
+普通 DSH 对话用 `canvas_create` 可命名自己的新画布；默认直接调用工具也会自动创建。用户明确指定已有图时才用 `canvas_list` / `canvas_select`，`canvas_context` 查看绑定。一个会话固定对应一张画布，不依赖浏览器当前页。直接使用 MCP 的其他客户端，默认也会为各自 stdio 连接创建独立画布。
 
 ## 源码接线升级
 
@@ -54,6 +54,7 @@ host 插件 `host.js` 每轮读取绑定文件与图纸，将 ID、名称、地�
 
 ```bash
 sudo env PATH="$PATH" ./scripts/install-workspace.sh
+./scripts/install-dsh-mcp.sh web
 sudo env PATH="$PATH" ./scripts/install-session-scope.sh
 ```
 

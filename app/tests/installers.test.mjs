@@ -155,6 +155,7 @@ async function workspaceFixture(t, { readyAfter = 3 } = {}) {
   await cp(path.join(repoRoot, 'templates/canvas-workspace.service.tpl'), path.join(repo, 'templates/canvas-workspace.service.tpl'));
   const globalRoot = path.join(temp, 'global');
   await mkdir(path.join(globalRoot, 'mcp-excalidraw-server/dist'), { recursive: true });
+  await mkdir(path.join(repo, 'app/node_modules/@modelcontextprotocol/server'), { recursive: true });
   await writeFile(path.join(globalRoot, 'mcp-excalidraw-server/dist/server.js'), '');
   const site = path.join(temp, 'etc/nginx/sites-available/canvas-site.conf');
   await mkdir(path.dirname(site), { recursive: true });
@@ -237,11 +238,13 @@ async function mcpFixture(t, { dependencyInstalled = false } = {}) {
   const globalRoot = path.join(temp, 'global');
   const log = path.join(temp, 'commands.log');
   await mkdir(scripts, { recursive: true });
+  await mkdir(path.join(repo, 'app/node_modules/@modelcontextprotocol/server'), { recursive: true });
   await mkdir(stubBin, { recursive: true });
   await mkdir(profile, { recursive: true });
   await mkdir(path.join(globalRoot, 'mcp-excalidraw-server/dist'), { recursive: true });
   await writeFile(path.join(profile, 'package.json'), '{}');
   await writeFile(path.join(globalRoot, 'mcp-excalidraw-server/dist/index.js'), '');
+  await writeFile(path.join(repo, 'app/node_modules/@modelcontextprotocol/server/package.json'), '{}');
   if (dependencyInstalled) {
     await mkdir(path.join(profile, 'node_modules/@deepseek-ai/dsh-mcp-client'), { recursive: true });
     await writeFile(path.join(profile, 'node_modules/@deepseek-ai/dsh-mcp-client/package.json'), '{}');

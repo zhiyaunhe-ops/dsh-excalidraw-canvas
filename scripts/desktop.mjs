@@ -76,8 +76,8 @@ export async function startDesktop(options = desktopOptions()) {
       libraryDir: options.root,
       mcp: {
         serverName: 'excalidraw', transport: 'stdio', command: process.execPath,
-        args: [path.join(upstreamPackage, 'dist/index.js')],
-        env: { ELECTRON_RUN_AS_NODE: '1', EXPRESS_SERVER_URL: upstream, EXCALIDRAW_NO_AUTOSTART: '1', EXCALIDRAW_EXPORT_DIR: homedir() },
+        args: [path.join(repository, 'app/mcp-router.mjs')],
+        env: { ELECTRON_RUN_AS_NODE: '1', CANVAS_WORKSPACE_URL: `http://127.0.0.1:${options.workspacePort}`, EXCALIDRAW_EXPORT_DIR: homedir() },
         failOnStartupError: false,
       },
     };
