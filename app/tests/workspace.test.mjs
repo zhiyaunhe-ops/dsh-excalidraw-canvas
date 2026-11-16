@@ -127,6 +127,71 @@ test('adopts existing upstream scene and supports create, save, rename, list, ex
   assert.equal((await f.request(`/workspace/api/documents/${id}`)).response.status, 404);
 });
 
+test('persists nested folders and moves documents without changing scenes or bindings', async t => {
+  const f = await fixture({ elements: [element('foreground')], files: {} });
+  t.after(f.close);
+  const foregroundId = (await f.request('/workspace/api/documents')).body.activeId;
+  const project = await f.send('POST', '/workspace/api/folders', { name: 'Hainan' });
+  assert.equal(project.response.status, 201);
+  const projectId = project.body.folder.id;
+  const nested = await f.send('POST', '/workspace/api/folders', { name: 'Diagrams', parentId: projectId });
+  assert.equal(nested.response.status, 201);
+  const folderId = nested.body.folder.id;
+
+  const doc = await f.send('POST', '/workspace/api/documents', { title: 'Route map', folderId, scene: { elements: [element('route-map')], files: { image: { id: 'image', dataURL: 'data:image/png;base64,AA==', mimeType: 'image/png' } } } });
+  assert.equal(doc.response.status, 201);
+  const docId = doc.body.document.id;
+  assert.equal(doc.body.document.folderId, folderId);
+  assert.equal(doc.body.document.folderPath, 'Hainan / Diagrams');
+  const agent = await f.send('POST', '/workspace/api/assistant/ensure', { sessionId: 'folder-agent', title: 'Agent map', folderId: projectId });
+  const agentId = agent.body.canvasId;
+  assert.equal(agent.body.document.folderPath, 'Hainan');
+  const host = mockHost(f, [{ id: 'folder-agent' }]);
+  t.after(() => host.close());
+  assert.match(host.prompts.get('folder-agent').text(), /文件夹: Hainan/);
+
+  const beforeDoc = await f.request(`/workspace/api/documents/${docId}`);
+  const beforeAgentBinding = await f.request('/workspace/api/assistant/bindings/folder-agent');
+  const beforeActive = (await f.request('/workspace/api/documents')).body.activeId;
+  assert.equal(beforeActive, foregroundId);
+  assert.equal((await f.send('DELETE', `/workspace/api/folders/${projectId}`)).response.status, 409, 'a folder with children/documents cannot be deleted');
+  assert.equal((await f.send('PATCH', `/workspace/api/folders/${projectId}`, { parentId: folderId })).response.status, 400, 'moving a parent into its child must be rejected');
+
+  const invalidBatch = await f.send('POST', '/workspace/api/documents/move', { ids: [docId, 'missing-document'], folderId: null });
+  assert.equal(invalidBatch.response.status, 404);
+  assert.equal((await f.request(`/workspace/api/documents/${docId}`)).body.document.folderId, folderId, 'invalid batches must not move any document');
+
+  const moved = await f.send('POST', '/workspace/api/documents/move', { ids: [docId, agentId], folderId });
+  assert.equal(moved.response.status, 200);
+  assert.deepEqual(moved.body.documents.map(item => item.folderId), [folderId, folderId]);
+  const afterMove = await f.request(`/workspace/api/documents/${docId}`);
+  const afterAgentBinding = await f.request('/workspace/api/assistant/bindings/folder-agent');
+  assert.deepEqual(afterMove.body.scene, beforeDoc.body.scene);
+  assert.equal(afterMove.body.document.revision, beforeDoc.body.document.revision);
+  assert.equal(afterMove.body.document.folderPath, 'Hainan / Diagrams');
+  assert.match(host.prompts.get('folder-agent').text(), /文件夹: Hainan \/ Diagrams/);
+  assert.equal(afterAgentBinding.body.canvasId, beforeAgentBinding.body.canvasId);
+  assert.equal((await f.request('/workspace/api/documents')).body.activeId, beforeActive);
+
+  const saved = await f.send('PUT', `/workspace/api/documents/${docId}`, {
+    revision: afterMove.body.document.revision,
+    title: 'Route map saved',
+    scene: { ...afterMove.body.scene, elements: [element('route-map-saved')] },
+  });
+  assert.equal(saved.response.status, 200);
+  assert.equal(saved.body.document.folderId, folderId);
+  assert.equal(saved.body.document.folderPath, 'Hainan / Diagrams');
+
+  await f.restart();
+  const restored = await f.request('/workspace/api/documents');
+  assert(restored.body.folders.some(item => item.id === projectId && item.name === 'Hainan'));
+  assert(restored.body.folders.some(item => item.id === folderId && item.parentId === projectId));
+  assert.equal(restored.body.documents.find(item => item.id === docId).folderId, folderId);
+  assert.equal(restored.body.documents.find(item => item.id === agentId).folderId, folderId);
+  assert.equal(restored.body.activeId, foregroundId);
+  assert.equal((await f.request('/workspace/api/assistant/bindings/folder-agent')).body.canvasId, agentId);
+});
+
 test('rejects stale revisions and opening a different document preserves both documents', async t => {
   const f = await fixture({ elements: [element('initial')], files: {} });
   t.after(f.close);

@@ -18,6 +18,10 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
   await mkdir(drawings, { recursive: true });
   const stateFile = path.join(root, '.active-canvas.json');
   const bindingsFile = path.join(root, '.assistant-bindings.json');
+  const foldersFile = path.join(root, '.folders.json');
+  let library = { folders: {}, documents: {} };
+  try { library = JSON.parse(await readFile(foldersFile, 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
   let bindings = {};
   try { bindings = JSON.parse(await readFile(bindingsFile, 'utf8')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -55,7 +59,18 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
     try { return JSON.parse(await readFile(fileFor(id), 'utf8')); }
     catch (error) { if (error.code === 'ENOENT') throw fail(404, '这张画布不存在'); throw error; }
   }
-  const summary = (id, scene, modified) => ({ id, title: scene.name || id.replace(/-\d{8}-\d{4}$/, ''), updatedAt: modified, count: scene.elements.filter(el => !el.isDeleted).length, revision: scene.canvasMeta?.revision || 0, active: id === activeId });
+  function folder(id) {
+    const item = library.folders[id];
+    if (!item) throw fail(404, '文件夹不存在');
+    return item;
+  }
+  const folderId = value => { if (!value) return null; folder(value); return value; };
+  function folderPath(id) {
+    const names = [];
+    while (id) { const item = folder(id); names.unshift(item.name); id = item.parentId; }
+    return names.join(' / ');
+  }
+  const summary = (id, scene, modified) => ({ id, title: scene.name || id.replace(/-\d{8}-\d{4}$/, ''), updatedAt: modified, count: scene.elements.filter(el => !el.isDeleted).length, revision: scene.canvasMeta?.revision || 0, active: id === activeId, folderId: library.documents[id] || null, folderPath: folderPath(library.documents[id]) });
   async function document(id) {
     const scene = await read(id);
     return { document: summary(id, scene, (await stat(fileFor(id))).mtime.toISOString()), scene };
@@ -179,17 +194,20 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
     const { document: info } = await document(canvasId);
     return { sessionId, canvasId, document: info, filePath: fileFor(canvasId), activeId };
   }
-  async function ensureCanvas(sessionId, title) {
+  async function ensureCanvas(sessionId, title, destination) {
     if (bindings[sessionId]) return bindingContext(sessionId);
+    const target = folderId(destination);
     const canvasId = `canvas-${randomUUID().slice(0, 12)}`;
+    if (target) library.documents[canvasId] = target;
     const result = await persist(canvasId, { ...blank(), name: title?.trim() || '助手画布', canvasMeta: { revision: 1 } });
+    if (target) await atomicWrite(foldersFile, library);
     bindings[sessionId] = canvasId;
     await atomicWrite(bindingsFile, bindings);
     broadcast({ type: 'created', document: result.document });
     return bindingContext(sessionId);
   }
   app.post('/workspace/api/assistant/ensure', route(async (req, res) => {
-    res.json(await ensureCanvas(sessionKey(req.body.sessionId), req.body.title));
+    res.json(await ensureCanvas(sessionKey(req.body.sessionId), req.body.title, req.body.folderId));
   }));
   // Only the document's own queue spans a tool invocation. No workspace-wide
   // lock is held while an agent is drawing or rendering a different document.
@@ -300,17 +318,63 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
     if (saveError) throw saveError;
     res.json({ success: true, canvasId: completed.canvasId, activeId });
   }));
+  app.get('/workspace/api/folders', route(async (_req, res) => res.json({ folders: Object.values(library.folders) })));
+  app.post('/workspace/api/folders', route(async (req, res) => {
+    const name = req.body.name?.trim();
+    if (!name) throw fail(400, '请输入文件夹名称');
+    const parentId = folderId(req.body.parentId);
+    if (Object.values(library.folders).some(item => item.parentId === parentId && item.name === name)) throw fail(409, '此位置已有同名文件夹');
+    const item = { id: `folder-${randomUUID().slice(0, 12)}`, name, parentId };
+    library.folders[item.id] = item;
+    await atomicWrite(foldersFile, library);
+    broadcast({ type: 'folders' });
+    res.status(201).json({ folder: item });
+  }));
+  app.patch('/workspace/api/folders/:id', route(async (req, res) => {
+    const item = folder(req.params.id);
+    const name = req.body.name === undefined ? item.name : req.body.name.trim();
+    if (!name) throw fail(400, '请输入文件夹名称');
+    const parentId = req.body.parentId === undefined ? item.parentId : folderId(req.body.parentId);
+    for (let ancestor = parentId; ancestor; ancestor = folder(ancestor).parentId) if (ancestor === item.id) throw fail(400, '不能把文件夹移到自己或自己的子文件夹中');
+    if (Object.values(library.folders).some(other => other.id !== item.id && other.parentId === parentId && other.name === name)) throw fail(409, '此位置已有同名文件夹');
+    Object.assign(item, { name, parentId });
+    await atomicWrite(foldersFile, library);
+    broadcast({ type: 'folders' });
+    res.json({ folder: item });
+  }));
+  app.delete('/workspace/api/folders/:id', route(async (req, res) => {
+    folder(req.params.id);
+    if (Object.values(library.folders).some(item => item.parentId === req.params.id) || Object.values(library.documents).includes(req.params.id)) throw fail(409, '文件夹非空，请先移出画布和子文件夹');
+    delete library.folders[req.params.id];
+    await atomicWrite(foldersFile, library);
+    broadcast({ type: 'folders' });
+    res.json({ success: true });
+  }));
+  app.post('/workspace/api/documents/move', route(async (req, res) => {
+    if (!Array.isArray(req.body.ids) || !req.body.ids.length) throw fail(400, '请先选择画布');
+    const destination = folderId(req.body.folderId);
+    const ids = [...new Set(req.body.ids)];
+    await Promise.all(ids.map(read));
+    for (const id of ids) { if (destination) library.documents[id] = destination; else delete library.documents[id]; }
+    await atomicWrite(foldersFile, library);
+    broadcast({ type: 'folders' });
+    res.json({ documents: await Promise.all(ids.map(async id => (await document(id)).document)) });
+  }));
   app.get('/workspace/api/documents', route(async (_req, res) => {
     const names = (await readdir(drawings)).filter(name => name.endsWith('.excalidraw'));
     const documents = await Promise.all(names.map(name => document(name.slice(0, -11)).then(value => value.document)));
-    res.json({ documents: documents.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), activeId, connected: upstreamConnected });
+    res.json({ documents: documents.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)), folders: Object.values(library.folders), activeId, connected: upstreamConnected });
   }));
   app.get('/workspace/api/documents/:id', route(async (req, res) => res.json(await document(req.params.id))));
   app.post('/workspace/api/documents', route(async (req, res) => {
+    const destination = folderId(req.body.folderId);
     const id = `canvas-${randomUUID().slice(0, 12)}`;
     const scene = req.body.scene || blank();
     if (!Array.isArray(scene.elements)) throw fail(400, '请选择有效的 .excalidraw 文件');
+    if (destination) library.documents[id] = destination;
     const result = await persist(id, { ...scene, type: 'excalidraw', version: 2, files: scene.files || {}, name: req.body.title?.trim() || '未命名画布', canvasMeta: { revision: 1 } });
+    if (destination) await atomicWrite(foldersFile, library);
+    broadcast({ type: 'created', document: result.document });
     res.status(201).json(result);
   }));
   app.post('/workspace/api/documents/:id/open', route(async (req, res) => res.json(await activate(req.params.id))));
@@ -348,6 +412,7 @@ export async function createWorkspace({ root, upstream, mode = 'cloud', expandEl
     if (req.params.id === activeId) throw fail(409, '请先打开另一张画布，再删除当前正在使用的画布');
     await read(req.params.id);
     await unlink(fileFor(req.params.id));
+    if (library.documents[req.params.id]) { delete library.documents[req.params.id]; await atomicWrite(foldersFile, library); }
     for (const extension of ['.png', '.svg']) await unlink(path.join(drawings, req.params.id + extension)).catch(error => { if (error.code !== 'ENOENT') throw error; });
     previews.delete(req.params.id);
     const runtime = await runtimes.get(req.params.id);

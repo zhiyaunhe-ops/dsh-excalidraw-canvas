@@ -11,6 +11,7 @@ const clientId = crypto.randomUUID();
 const mode = window.CANVAS_RUNTIME?.mode || 'cloud';
 const storage = mode === 'desktop' ? '本机' : '云端';
 const paths = {
+  folder: <path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />,
   arrow: <><path d="m9 18 6-6-6-6" /></>,
   back: <><path d="m12 19-7-7 7-7M5 12h14" /></>,
   plus: <path d="M12 5v14M5 12h14" />,
@@ -53,7 +54,7 @@ function NameModal({ title, initial = '', submit, close, label = '保存' }) {
   return <Modal title={title} close={close} actions={<><button className="button" onClick={close}>取消</button><button className="button primary" type="submit" form="name-form" disabled={busy || !value.trim()}>{busy ? '处理中…' : label}</button></>}><form id="name-form" onSubmit={commit}><label className="field-label" htmlFor="canvas-name">画布名称</label><input id="canvas-name" className="text-field" autoFocus maxLength={120} value={value} onChange={e => setValue(e.target.value)} placeholder="给这个想法起个名字" /></form>{error && <p className="error-text" role="alert">{error}</p>}</Modal>;
 }
 function App() {
-  const [route, setRoute] = useState(window.location.pathname);
+  const [route, setRoute] = useState(window.location.pathname + window.location.search);
   const [theme, setTheme] = useState(() => localStorage.getItem('canvas-theme') || 'light');
   const [toast, setToast] = useState('');
   const [assistantDocuments, setAssistantDocuments] = useState([]);
@@ -73,12 +74,12 @@ function App() {
   routeRef.current = route;
   function notify(message) { setToast(message); clearTimeout(timer.current); timer.current = setTimeout(() => setToast(''), 4200); }
   async function navigate(url) {
-    try { await navigationGuard.current?.(); history.pushState(null, '', url); setRoute(window.location.pathname); }
+    try { await navigationGuard.current?.(); history.pushState(null, '', url); setRoute(window.location.pathname + window.location.search); }
     catch (error) { notify(error.message); }
   }
   useEffect(() => {
     const onPop = async () => {
-      const destination = window.location.pathname;
+      const destination = window.location.pathname + window.location.search;
       try { await navigationGuard.current?.(); setRoute(destination); }
       catch (error) { history.pushState(null, '', routeRef.current); notify(error.message); }
     };
@@ -86,12 +87,28 @@ function App() {
     return () => window.removeEventListener('popstate', onPop);
   }, []);
   useEffect(() => { document.documentElement.dataset.theme = theme; localStorage.setItem('canvas-theme', theme); }, [theme]);
-  const id = route.startsWith('/canvas/') ? decodeURIComponent(route.slice(8)) : null;
+  const pathname = route.split('?')[0];
+  const id = pathname.startsWith('/canvas/') ? decodeURIComponent(pathname.slice(8)) : null;
   const shared = { navigate, notify, theme, chat, setChat: showAssistant, prepareAssistant, registerAssistant: (id, handlers) => { if (handlers) assistantHandlers.current.set(id, handlers); else assistantHandlers.current.delete(id); }, setNavigationGuard: guard => { navigationGuard.current = guard; }, toggleTheme: () => setTheme(theme === 'light' ? 'dark' : 'light') };
-  return <><div className={`workspace${id ? ' editor-workspace' : ''}${id && chat ? ' assistant-open' : ''}`}><div className="page-view">{id ? <Editor key={id} id={id} {...shared} /> : <Library {...shared} />}</div><AssistantDock mode={mode} documents={assistantDocuments} currentId={id} open={chat} onClose={() => showAssistant(false)} onKeyDown={(id, event) => assistantHandlers.current.get(id)?.keydown(event)} Icon={Icon} /></div>{toast && <div className="toast" role="status"><Icon name="check" />{toast}</div>}</>;
+  return <><div className={`workspace${id ? ' editor-workspace' : ''}${id && chat ? ' assistant-open' : ''}`}><div className="page-view">{id ? <Editor key={id} id={id} {...shared} /> : <Library {...shared} route={route} />}</div><AssistantDock mode={mode} documents={assistantDocuments} currentId={id} open={chat} onClose={() => showAssistant(false)} onKeyDown={(id, event) => assistantHandlers.current.get(id)?.keydown(event)} Icon={Icon} /></div>{toast && <div className="toast" role="status"><Icon name="check" />{toast}</div>}</>;
 }
-function Library({ navigate, notify, theme, toggleTheme, prepareAssistant }) {
+function folderTrail(id, folders) {
+  const result = [];
+  while (id) { const item = folders.find(folder => folder.id === id); if (!item) break; result.unshift(item); id = item.parentId; }
+  return result;
+}
+function MoveModal({ folders, initial, excludeId, count, submit, close }) {
+  const [target, setTarget] = useState(initial || '');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const options = folders.filter(folder => !folderTrail(folder.id, folders).some(item => item.id === excludeId)).map(folder => ({ id: folder.id, label: folderTrail(folder.id, folders).map(item => item.name).join(' / ') })).sort((a, b) => a.label.localeCompare(b.label, 'zh-CN'));
+  async function commit() { setBusy(true); try { await submit(target || null); close(); } catch (error) { setError(error.message); setBusy(false); } }
+  return <Modal title="移动到文件夹" close={close} actions={<><button className="button" onClick={close}>取消</button><button className="button primary" disabled={busy} onClick={commit}>{busy ? '移动中…' : '移动'}</button></>}><p className="modal-copy">{count ? `已选择 ${count} 张画布` : '选择文件夹的新位置'}</p><label className="field-label" htmlFor="move-folder">目标文件夹</label><select id="move-folder" className="text-field" value={target} onChange={event => setTarget(event.target.value)}><option value="">画布库</option>{options.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}</select>{error && <p className="error-text" role="alert">{error}</p>}</Modal>;
+}
+function Library({ navigate, notify, toggleTheme, theme, prepareAssistant, route }) {
+  const folderId = new URLSearchParams(route.split('?')[1] || '').get('folder') || null;
   const [items, setItems] = useState([]);
+  const [folders, setFolders] = useState([]);
   const [activeId, setActiveId] = useState();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -99,46 +116,64 @@ function Library({ navigate, notify, theme, toggleTheme, prepareAssistant }) {
   const [sort, setSort] = useState('updated');
   const [modal, setModal] = useState(null);
   const [menu, setMenu] = useState(null);
+  const [selected, setSelected] = useState([]);
   const [busy, setBusy] = useState(false);
   const importRef = useRef();
-  async function refresh() { try { const result = await request('/documents'); setItems(result.documents); setActiveId(result.activeId); const current = result.documents.find(item => item.id === result.activeId); if (current) prepareAssistant({ id: current.id, title: current.title }); setError(''); } catch (e) { setError(e.message); } finally { setLoading(false); } }
+  const trail = folderTrail(folderId, folders);
+  const currentFolder = folders.find(folder => folder.id === folderId);
+  const enter = id => navigate(`/library/${id ? `?folder=${encodeURIComponent(id)}` : ''}`);
+  async function refresh() { try { const result = await request('/documents'); setItems(result.documents); setFolders(result.folders || []); setActiveId(result.activeId); const current = result.documents.find(item => item.id === result.activeId); if (current) prepareAssistant({ id: current.id, title: current.title }); setError(''); } catch (error) { setError(error.message); } finally { setLoading(false); } }
   useEffect(() => { document.title = '画布库 · DeepSeek Harness'; refresh(); const visible = () => { if (!document.hidden) refresh(); }; document.addEventListener('visibilitychange', visible); return () => document.removeEventListener('visibilitychange', visible); }, []);
-  useEffect(() => { const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/workspace/events`); socket.onmessage = event => { if (['created', 'scene', 'renamed', 'deleted'].includes(JSON.parse(event.data).type)) refresh(); }; return () => socket.close(); }, []);
+  useEffect(() => { const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss:' : 'ws:'}//${location.host}/workspace/events`); socket.onmessage = event => { if (['created', 'scene', 'renamed', 'deleted', 'folders'].includes(JSON.parse(event.data).type)) refresh(); }; return () => socket.close(); }, []);
+  useEffect(() => { setSelected([]); setQuery(''); setMenu(null); }, [folderId]);
   useEffect(() => { if (!menu) return; const close = () => setMenu(null); window.addEventListener('click', close); return () => window.removeEventListener('click', close); }, [menu]);
-  const open = id => navigate(`/canvas/${encodeURIComponent(id)}`);
-  async function create(title, scene) { const result = await send('/documents', { title, scene }); prepareAssistant({ id: result.document.id, title: result.document.title }); open(result.document.id); }
-  async function importFile(e) {
-    const file = e.target.files[0]; if (!file) return;
+  const open = id => { const item = items.find(item => item.id === id); const destination = item?.folderId || folderId; navigate(`/canvas/${encodeURIComponent(id)}${destination ? `?folder=${encodeURIComponent(destination)}` : ''}`); };
+  async function create(title, scene) { const result = await send('/documents', { title, scene, folderId }); prepareAssistant({ id: result.document.id, title: result.document.title }); open(result.document.id); }
+  async function importFile(event) {
+    const file = event.target.files[0]; if (!file) return;
     setBusy(true);
     try { const scene = JSON.parse(await file.text()); if (!Array.isArray(scene.elements)) throw new Error('文件中没有有效的 Excalidraw 画布'); await create(file.name.replace(/\.excalidraw$|\.json$/i, ''), scene); }
-    catch (e) { notify(`导入失败：${e.message}`); } finally { setBusy(false); e.target.value = ''; }
+    catch (error) { notify(`导入失败：${error.message}`); } finally { setBusy(false); event.target.value = ''; }
   }
-  async function duplicate(item) { try { const { scene } = await request(`/documents/${encodeURIComponent(item.id)}`); const result = await send('/documents', { title: item.title + ' · 副本', scene }); prepareAssistant({ id: result.document.id, title: result.document.title }); await refresh(); notify(`已在${storage}创建副本`); return result; } catch (e) { notify(e.message); } }
-  const filtered = items.filter(item => item.title.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === 'name' ? a.title.localeCompare(b.title, 'zh-CN') : b.updatedAt.localeCompare(a.updatedAt));
-  const current = items.find(item => item.id === activeId);
+  async function duplicate(item) { try { const { scene } = await request(`/documents/${encodeURIComponent(item.id)}`); const result = await send('/documents', { title: item.title + ' · 副本', scene, folderId: item.folderId }); prepareAssistant({ id: result.document.id, title: result.document.title }); await refresh(); notify(`已在${storage}创建副本`); } catch (error) { notify(error.message); } }
+  async function move(ids, destination) { await send('/documents/move', { ids, folderId: destination }); setSelected([]); await refresh(); notify(destination ? '已移入文件夹' : '已移回画布库'); }
+  const localItems = items.filter(item => (item.folderId || null) === folderId);
+  const filtered = localItems.filter(item => item.title.toLowerCase().includes(query.toLowerCase())).sort((a, b) => sort === 'name' ? a.title.localeCompare(b.title, 'zh-CN') : b.updatedAt.localeCompare(a.updatedAt));
+  const childFolders = folders.filter(folder => folder.parentId === folderId && folder.name.toLowerCase().includes(query.toLowerCase())).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+  const current = localItems.find(item => item.id === activeId);
+  const missing = !loading && folderId && !currentFolder;
+  const allSelected = filtered.length > 0 && filtered.every(item => selected.includes(item.id));
+  const selectAll = () => setSelected(previous => allSelected ? previous.filter(id => !filtered.some(item => item.id === id)) : [...new Set([...previous, ...filtered.map(item => item.id)])]);
   return <div className="library-layout">
-    <aside className="sidebar"><a className="brand" href="/library/" onClick={e => { e.preventDefault(); navigate('/library/'); }}><Mark /><span>画布<span className="brand-sub">DeepSeek Harness</span></span></a>
-      <div className="sidebar-caption">工作空间</div><button className="nav-item selected"><Icon name="grid" />所有画布<span>{items.length}</span></button>
-      {current && <button className="nav-item" onClick={() => open(activeId)}><Icon name="pen" />继续绘图<Icon name="arrow" size={14} /></button>}
-      <div className="sidebar-note"><span className="cloud-label"><Icon name="cloud" />{storage}工作空间</span><p>每一个想法，都有地方安放。<br />画布自动保存在{mode === 'desktop' ? '本机工作目录' : '服务器'}。</p><div className="shortcut">快速保存 <kbd>⌘ / Ctrl</kbd><kbd>S</kbd></div></div>
+    <aside className="sidebar"><a className="brand" href="/library/" onClick={event => { event.preventDefault(); enter(null); }}><Mark /><span>画布<span className="brand-sub">DeepSeek Harness</span></span></a>
+      <div className="sidebar-caption">工作空间</div><button className={`nav-item${!folderId ? ' selected' : ''}`} onClick={() => enter(null)}><Icon name="grid" />画布库<span>{items.length}</span></button>
+      {folders.filter(folder => !folder.parentId).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN')).map(folder => <button key={folder.id} className={`nav-item folder-nav${trail.some(item => item.id === folder.id) ? ' selected' : ''}`} onClick={() => enter(folder.id)}><Icon name="folder" /><span className="folder-nav-name">{folder.name}</span></button>)}
+      <div className="sidebar-note"><span className="cloud-label"><Icon name="cloud" />{storage}工作空间</span><p>按项目归档，按灵感展开。<br />画布会自动保存。</p><div className="shortcut">快速保存 <kbd>⌘ / Ctrl</kbd><kbd>S</kbd></div></div>
       <button className="theme-button" onClick={toggleTheme}><Icon name={theme === 'light' ? 'moon' : 'sun'} />{theme === 'light' ? '深色外观' : '浅色外观'}</button>
     </aside>
-    <main className="library-main"><header className="library-topbar"><div className="breadcrumb">工作空间<Icon name="arrow" size={13} /><span>所有画布</span></div><span className="top-cloud"><span className="status-dot" />{storage}存储</span></header>
-      <div className="library-content"><section className="library-heading"><div><span className="eyebrow">YOUR CREATIVE SPACE</span><h1>让想法，跃然纸上<span className="heading-dot">。</span></h1><p>草图、流程与灵感，都从一张画布开始。</p></div><div className="heading-actions"><button className="button" disabled={busy} onClick={() => importRef.current.click()}><Icon name="upload" />{busy ? '导入中…' : '导入画布'}</button><button className="button primary" onClick={() => setModal({ type: 'new' })}><Icon name="plus" />新建画布</button></div></section>
+    <main className="library-main"><header className="library-topbar"><nav className="breadcrumb" aria-label="文件夹路径"><button onClick={() => enter(null)}>画布库</button>{trail.map(folder => <React.Fragment key={folder.id}><Icon name="arrow" size={13} /><button onClick={() => enter(folder.id)} aria-current={folder.id === folderId ? 'page' : undefined}>{folder.name}</button></React.Fragment>)}</nav><span className="top-cloud"><span className="status-dot" />{storage}存储</span></header>
+      <div className="library-content"><section className="library-heading"><div><span className="eyebrow">{folderId ? 'PROJECT FOLDER' : 'YOUR CREATIVE SPACE'}</span><h1>{currentFolder?.name || '画布库'}<span className="heading-dot">。</span></h1><p>{folderId ? '项目画布与子文件夹，集中在这里。' : '把画布放进文件夹，给每个项目留一块空间。'}</p></div><div className="heading-actions"><button className="button" onClick={() => setModal({ type: 'new-folder' })}><Icon name="folder" />新建文件夹</button><button className="button" disabled={busy} onClick={() => importRef.current.click()}><Icon name="upload" />{busy ? '导入中…' : '导入'}</button><button className="button primary" onClick={() => setModal({ type: 'new' })}><Icon name="plus" />新建画布</button></div></section>
         <input type="file" accept=".excalidraw,.json" ref={importRef} hidden onChange={importFile} />
         {current && !query && <button className="continue-card" onClick={() => open(activeId)}><span className="continue-icon"><Icon name="pen" size={23} /></span><span className="continue-text"><small>接着上次的灵感</small><strong>{current.title}</strong></span><span className="continue-cta">继续编辑<Icon name="arrow" size={17} /></span></button>}
-        <div className="library-tools"><div className="section-title">所有画布<span>{items.length}</span></div><div className="filter-tools"><label className="search-field"><Icon name="search" size={17} /><input aria-label="搜索画布" placeholder="搜索画布…" value={query} onChange={e => setQuery(e.target.value)} />{query && <button aria-label="清空搜索" onClick={() => setQuery('')}><Icon name="close" size={14} /></button>}</label><select aria-label="排序方式" value={sort} onChange={e => setSort(e.target.value)}><option value="updated">最近更新</option><option value="name">名称排序</option></select></div></div>
-        {error ? <div className="empty-state" role="alert"><Icon name="cloud" size={32} /><h2>暂时无法读取画布</h2><p>{error}</p><button className="button" onClick={refresh}>重新载入</button></div> : loading ? <div className="loading-state"><span className="spinner" />正在读取{storage}画布…</div> : <div className="canvas-grid">
-          {!query && <button className="new-card" onClick={() => setModal({ type: 'new' })}><span><Icon name="plus" size={24} /></span><strong>一张新画布</strong><small>给下一个想法留点空间</small></button>}
-          {filtered.map(item => <article className="canvas-card" key={item.id}><button className="card-preview" onClick={() => open(item.id)} aria-label={`打开 ${item.title}`}>{item.count ? <img src={`${API}/documents/${encodeURIComponent(item.id)}/preview?v=${encodeURIComponent(item.updatedAt)}`} loading="lazy" alt={item.title} onError={e => { e.target.style.display = 'none'; }} /> : <span className="blank-preview"><Icon name="file" size={34} /><span>空白画布</span></span>}{item.active && <span className="active-badge"><span className="status-dot" />最近打开</span>}<span className="preview-open">打开画布<Icon name="arrow" size={15} /></span></button><div className="card-meta"><div><button className="card-title" title={item.title} onClick={() => open(item.id)}>{item.title}</button><p>{date(item.updatedAt)}<span>·</span>{item.count} 个元素</p></div><div className="card-menu-wrap"><button className="icon-button" aria-label={`${item.title}的更多操作`} aria-expanded={menu === item.id} onClick={e => { e.stopPropagation(); setMenu(menu === item.id ? null : item.id); }}><Icon name="more" /></button>{menu === item.id && <div className="dropdown"><button onClick={() => setModal({ type: 'rename', item })}><Icon name="pen" />重命名</button><button onClick={() => duplicate(item)}><Icon name="copy" />创建副本</button><a href={`${API}/documents/${encodeURIComponent(item.id)}/export/excalidraw`} download><Icon name="download" />导出文件</a><button className="danger" onClick={() => setModal({ type: 'delete', item })}><Icon name="trash" />删除画布</button></div>}</div></div></article>)}
-        </div>}
-        {!loading && query && filtered.length === 0 && <div className="empty-state"><Icon name="search" size={32} /><h2>没有找到相关画布</h2><p>换个关键词试试。</p></div>}
+        <div className="library-tools"><div className="section-title">{currentFolder?.name || '画布库'}<span>{localItems.length} 张</span></div><div className="filter-tools"><label className="search-field"><Icon name="search" size={17} /><input aria-label="搜索当前文件夹" placeholder="搜索当前文件夹…" value={query} onChange={event => setQuery(event.target.value)} />{query && <button aria-label="清空搜索" onClick={() => setQuery('')}><Icon name="close" size={14} /></button>}</label><select aria-label="排序方式" value={sort} onChange={event => setSort(event.target.value)}><option value="updated">最近更新</option><option value="name">名称排序</option></select></div></div>
+        {error || missing ? <div className="empty-state" role="alert"><Icon name="folder" size={32} /><h2>{missing ? '这个文件夹不存在' : '暂时无法读取画布'}</h2><p>{error}</p><button className="button" onClick={missing ? () => enter(null) : refresh}>{missing ? '返回画布库' : '重新载入'}</button></div> : loading ? <div className="loading-state"><span className="spinner" />正在读取{storage}画布…</div> : <>
+          {childFolders.length > 0 && <div className="folder-grid">{childFolders.map(folder => <article className="folder-card" key={folder.id}><button className="folder-open" onClick={() => enter(folder.id)}><span className="folder-symbol"><Icon name="folder" size={28} /></span><span><strong>{folder.name}</strong><small>{items.filter(item => item.folderId === folder.id).length} 张画布 · {folders.filter(item => item.parentId === folder.id).length} 个子文件夹</small></span></button><div className="card-menu-wrap"><button className="icon-button" aria-label={`${folder.name}的更多操作`} onClick={event => { event.stopPropagation(); setMenu(menu === folder.id ? null : folder.id); }}><Icon name="more" /></button>{menu === folder.id && <div className="dropdown"><button onClick={() => setModal({ type: 'rename-folder', folder })}><Icon name="pen" />重命名</button><button onClick={() => setModal({ type: 'move-folder', folder })}><Icon name="folder" />移动到…</button><button className="danger" onClick={async () => { try { await request(`/folders/${encodeURIComponent(folder.id)}`, { method: 'DELETE' }); await refresh(); notify('空文件夹已删除'); } catch (error) { notify(error.message); } }}><Icon name="trash" />删除空文件夹</button></div>}</div></article>)}</div>}
+          {filtered.length > 0 && <div className={`selection-bar${selected.length ? ' has-selection' : ''}`}><button onClick={selectAll}>{allSelected ? '取消全选' : '全选画布'}</button><span>{selected.length ? `已选择 ${selected.length} 张` : '勾选画布可批量整理'}</span>{selected.length > 0 && <button className="selection-clear" onClick={() => setSelected([])}>取消选择</button>}{selected.length > 0 && <button className="button" onClick={() => setModal({ type: 'move', ids: selected })}><Icon name="folder" />移动到文件夹</button>}</div>}
+          <div className="canvas-grid">{!query && <button className="new-card" onClick={() => setModal({ type: 'new' })}><span><Icon name="plus" size={24} /></span><strong>一张新画布</strong><small>保存在{currentFolder?.name || '画布库'}</small></button>}
+            {filtered.map(item => <article className={`canvas-card${selected.includes(item.id) ? ' canvas-selected' : ''}`} key={item.id}><label className="canvas-select"><input type="checkbox" aria-label={`选择 ${item.title}`} checked={selected.includes(item.id)} onChange={event => setSelected(previous => event.target.checked ? [...previous, item.id] : previous.filter(id => id !== item.id))} /></label><button className="card-preview" onClick={() => open(item.id)} aria-label={`打开 ${item.title}`}>{item.count ? <img src={`${API}/documents/${encodeURIComponent(item.id)}/preview?v=${encodeURIComponent(item.updatedAt)}`} loading="lazy" alt={item.title} onError={event => { event.target.style.display = 'none'; }} /> : <span className="blank-preview"><Icon name="file" size={34} /><span>空白画布</span></span>}{item.active && <span className="active-badge"><span className="status-dot" />最近打开</span>}<span className="preview-open">打开画布<Icon name="arrow" size={15} /></span></button><div className="card-meta"><div><button className="card-title" title={item.title} onClick={() => open(item.id)}>{item.title}</button><p>{date(item.updatedAt)}<span>·</span>{item.count} 个元素</p></div><div className="card-menu-wrap"><button className="icon-button" aria-label={`${item.title}的更多操作`} aria-expanded={menu === item.id} onClick={event => { event.stopPropagation(); setMenu(menu === item.id ? null : item.id); }}><Icon name="more" /></button>{menu === item.id && <div className="dropdown"><button onClick={() => setModal({ type: 'rename', item })}><Icon name="pen" />重命名</button><button onClick={() => setModal({ type: 'move', ids: [item.id] })}><Icon name="folder" />移动到…</button><button onClick={() => duplicate(item)}><Icon name="copy" />创建副本</button><a href={`${API}/documents/${encodeURIComponent(item.id)}/export/excalidraw`} download><Icon name="download" />导出文件</a><button className="danger" onClick={() => setModal({ type: 'delete', item })}><Icon name="trash" />删除画布</button></div>}</div></div></article>)}
+          </div>
+          {query && !filtered.length && !childFolders.length && <div className="empty-state"><Icon name="search" size={32} /><h2>没有找到相关内容</h2><p>搜索范围为当前文件夹。</p></div>}
+        </>}
         <footer className="library-footer"><span>由 Excalidraw 驱动 · 为灵感而建</span><span>保存在{storage}，随时继续</span></footer>
       </div>
     </main>
     {modal?.type === 'new' && <NameModal title="开始一张新画布" initial="未命名画布" label="创建画布" close={() => setModal(null)} submit={title => create(title)} />}
+    {modal?.type === 'new-folder' && <NameModal title="新建文件夹" label="创建文件夹" close={() => setModal(null)} submit={async name => { const result = await send('/folders', { name, parentId: folderId }); await refresh(); enter(result.folder.id); }} />}
+    {modal?.type === 'rename-folder' && <NameModal title="重命名文件夹" initial={modal.folder.name} close={() => setModal(null)} submit={async name => { await send(`/folders/${encodeURIComponent(modal.folder.id)}`, { name }, 'PATCH'); await refresh(); }} />}
+    {modal?.type === 'move-folder' && <MoveModal folders={folders} initial={modal.folder.parentId} excludeId={modal.folder.id} close={() => setModal(null)} submit={async parentId => { await send(`/folders/${encodeURIComponent(modal.folder.id)}`, { parentId }, 'PATCH'); await refresh(); notify('文件夹已移动'); }} />}
+    {modal?.type === 'move' && <MoveModal folders={folders} initial={folderId} count={modal.ids.length} close={() => setModal(null)} submit={destination => move(modal.ids, destination)} />}
     {modal?.type === 'rename' && <NameModal title="重命名画布" initial={modal.item.title} close={() => setModal(null)} submit={async title => { await send(`/documents/${encodeURIComponent(modal.item.id)}`, { title }, 'PATCH'); await refresh(); notify('名称已更新'); }} />}
-    {modal?.type === 'delete' && <Modal title="删除这张画布？" close={() => setModal(null)} actions={<><button className="button" onClick={() => setModal(null)}>取消</button><button className="button danger-button" onClick={async () => { try { await request(`/documents/${encodeURIComponent(modal.item.id)}`, { method: 'DELETE' }); setModal(null); refresh(); notify('画布已删除'); } catch (e) { notify(e.message); } }}>删除画布</button></>}><p className="modal-copy">「{modal.item.title}」将从{storage}删除，此操作无法撤销。</p>{modal.item.active && <p className="error-text">这张画布正在使用，请先打开另一张画布。</p>}</Modal>}
+    {modal?.type === 'delete' && <Modal title="删除这张画布？" close={() => setModal(null)} actions={<><button className="button" onClick={() => setModal(null)}>取消</button><button className="button danger-button" onClick={async () => { try { await request(`/documents/${encodeURIComponent(modal.item.id)}`, { method: 'DELETE' }); setModal(null); await refresh(); notify('画布已删除'); } catch (error) { notify(error.message); } }}>删除画布</button></>}><p className="modal-copy">「{modal.item.title}」将从{storage}删除，此操作无法撤销。</p>{modal.item.active && <p className="error-text">这张画布正在使用，请先打开另一张画布。</p>}</Modal>}
   </div>;
 }
 
@@ -163,7 +198,7 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
   function updateTitle(value) { model.current.title = value; setTitle(value); document.title = `${value} · 画布`; }
   function applyRemote(result) {
     const m = model.current;
-    m.scene = result.scene; m.revision = result.document.revision;
+    m.scene = result.scene; m.revision = result.document.revision; m.folderId = result.document.folderId;
     updateTitle(result.document.title);
     const api = apiRef.current;
     if (api) {
@@ -190,7 +225,7 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
     const snapshot = m.scene;
     const signature = fingerprint(snapshot);
     m.saving = send(`/documents/${encoded}`, { scene: snapshot, revision: m.revision, title: m.title, clientId }, 'PUT').then(result => {
-      m.revision = result.document.revision;
+      m.revision = result.document.revision; m.folderId = result.document.folderId;
       m.baseline = signature;
       m.dirty = fingerprint(m.scene) !== signature;
       if (!m.disposed) { setStatus(m.dirty ? 'pending' : 'saved'); if (manual) notify(`已保存到${storage}`); }
@@ -226,6 +261,7 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
       ws.onmessage = async event => {
         const message = JSON.parse(event.data);
         if (message.type === 'connection') setConnected(message.connected);
+        if (message.type === 'folders') request(`/documents/${encoded}`).then(result => { m.folderId = result.document.folderId; }).catch(error => setError(error.message));
         if (message.type === 'active') setActive(message.id === id);
         if (message.type === 'renamed' && message.document.id === id) updateTitle(message.document.title);
         if (message.type === 'scene' && message.document.id === id && message.source !== clientId) {
@@ -254,7 +290,7 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
     };
     send(`/documents/${encoded}/open`, {}).then(result => {
       if (m.disposed) return;
-      m.scene = result.scene; m.revision = result.document.revision; m.baseline = fingerprint(result.scene); m.active = result.document.active;
+      m.scene = result.scene; m.revision = result.document.revision; m.folderId = result.document.folderId; m.baseline = fingerprint(result.scene); m.active = result.document.active;
       updateTitle(result.document.title); setLoaded(result); setCount(result.document.count); setActive(result.document.active); connect();
     }).catch(e => setLoadError(e.message));
     const unload = e => { if (m.dirty || m.saving) { e.preventDefault(); e.returnValue = ''; } };
@@ -284,7 +320,7 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
     clearTimeout(m.timer);
     if (!m.conflict) m.timer = setTimeout(() => autosave.current(), 700);
   }
-  async function leave() { try { await save(); navigate('/library/'); } catch (e) { setError(e.message); } }
+  async function leave() { try { await save(); navigate(`/library/${model.current.folderId ? `?folder=${encodeURIComponent(model.current.folderId)}` : ''}`); } catch (e) { setError(e.message); } }
   async function renameTitle() {
     const value = model.current.title.trim() || loaded.document.title;
     updateTitle(value);
@@ -306,7 +342,7 @@ function Editor({ id, navigate, notify, theme, toggleTheme, setNavigationGuard, 
       <WelcomeScreen><WelcomeScreen.Center><WelcomeScreen.Center.Heading>给想法一点自由的空间</WelcomeScreen.Center.Heading><WelcomeScreen.Center.Menu><WelcomeScreen.Center.MenuItem onSelect={() => setChat(true)} icon={<Icon name="chat" />}>和助手一起画</WelcomeScreen.Center.MenuItem></WelcomeScreen.Center.Menu></WelcomeScreen.Center></WelcomeScreen>
     </Excalidraw></main></div>
     <footer className="editor-footer"><span><span className={`status-dot ${connected ? '' : 'offline'}`} />{connected ? '工作空间已连接 · 画布独立运行' : '连接中断，正在重连'}<span className="footer-divider" />{count} 个元素</span><span className="footer-hint">更改自动保存到{storage}<span className="footer-divider" />Ctrl / ⌘ S 立即保存</span></footer>
-    {copyModal && <NameModal title={`另存为${storage}副本`} initial={title + ' · 副本'} label="保存副本" close={() => setCopyModal(false)} submit={async name => { const result = await send('/documents', { title: name, scene: model.current.scene }); model.current.dirty = false; model.current.conflict = false; prepareAssistant({ id: result.document.id, title: result.document.title }); notify(`已保存为${storage}副本`); navigate(`/canvas/${result.document.id}`); }} />}
+    {copyModal && <NameModal title={`另存为${storage}副本`} initial={title + ' · 副本'} label="保存副本" close={() => setCopyModal(false)} submit={async name => { const result = await send('/documents', { title: name, scene: model.current.scene, folderId: model.current.folderId }); model.current.dirty = false; model.current.conflict = false; prepareAssistant({ id: result.document.id, title: result.document.title }); notify(`已保存为${storage}副本`); navigate(`/canvas/${result.document.id}`); }} />}
   </div>;
 }
 

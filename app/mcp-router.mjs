@@ -7,7 +7,7 @@ const workspace = process.env.CANVAS_WORKSPACE_URL || 'http://127.0.0.1:9111';
 // Other MCP clients get their own drawing too, even without the DSH scope plugin.
 const connectionSession = process.env.CANVAS_SESSION_ID || `mcp-${randomUUID()}`;
 serveStdio(() => {
-  const server = new McpServer({ name: 'dsh-excalidraw-canvas', version: '0.5.0', description: 'Independent, automatically saved canvases. A new agent creates its own canvas in the background.' }, { capabilities: { tools: {} } });
+  const server = new McpServer({ name: 'dsh-excalidraw-canvas', version: '0.6.0', description: 'Independent, automatically saved canvases. A new agent creates its own canvas in the background.' }, { capabilities: { tools: {} } });
   for (const tool of tools) server.registerTool(tool.name, { description: tool.description, inputSchema: fromJsonSchema(tool.inputSchema) }, async (input, execution) => {
     const { __dshCanvasSession, ...args } = input;
     try {

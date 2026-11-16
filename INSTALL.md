@@ -86,7 +86,7 @@ npm run desktop
 
 停用插件后，在原仓库执行 `git pull --ff-only`、`npm run setup:desktop`，再通过 Desktop 插件管理器更新 bundle 并启用。不要一边运行服务一边替换其依赖。
 
-卸载插件会移除 DSH 接线；本机仓库及 `libraryDir` 数据目录保留。备份时复制整个 `libraryDir`，包括 `drawings/`、`.active-canvas.json`、`.assistant-bindings.json`。只复制图纸会丢失当前画布与会话映射。
+卸载插件会移除 DSH 接线；本机仓库及 `libraryDir` 数据目录保留。备份时复制整个 `libraryDir`，包括 `drawings/`、`.active-canvas.json`、`.assistant-bindings.json` 和 `.folders.json`。只复制图纸会丢失文件夹归属、当前画布与会话映射。
 
 <a id="cloud"></a>
 ## B. 云端模式
