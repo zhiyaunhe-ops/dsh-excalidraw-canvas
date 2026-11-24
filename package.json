@@ -23,7 +23,7 @@
   "keywords": ["dsh-plugin", "deepseek-harness", "excalidraw", "canvas", "mcp"],
   "engines": {
     "node": ">=20",
-    "dsh": "0.2.1-rc.2"
+    "dsh": "0.2.2-rc.5"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "~4.0.5",
