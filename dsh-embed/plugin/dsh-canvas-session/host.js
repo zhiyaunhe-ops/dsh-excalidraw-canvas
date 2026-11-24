@@ -9,6 +9,17 @@ export function apply(ctx, config = {}) {
   const root = config.libraryDir || '/var/www/canvas-library';
   const workspaceUrl = config.workspaceUrl || 'http://127.0.0.1:9111';
   const publicUrl = config.publicUrl || workspaceUrl;
+  // The rail entry in the browser client opens this URL in a Browser tab. The
+  // desktop port is configurable, so the client asks instead of hardcoding it.
+  ctx.inject(['webServer'], (scope) => {
+    scope.effect(() => scope.webServer.register({
+      kind: 'exact',
+      path: '/dsh-excalidraw-canvas/info.json',
+      resource: async () => new Response(JSON.stringify({ url: `${publicUrl}/library/`, workspaceUrl }), {
+        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+      }),
+    }));
+  });
   const decorated = new Map();
   function lineage(agent) {
     const ids = [];

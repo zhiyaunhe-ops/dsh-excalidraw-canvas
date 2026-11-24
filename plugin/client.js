@@ -19,12 +19,121 @@ window.__ModuleLoader__.load({
 		 * The workspace persists the session/canvas mapping before opening the
 		 * chat. The host injects that target into every request and wraps tools.
 		 */
-		const INJECT = ["sessions", "workspaces", "uiWorkspace"];
+		const React = require("react");
+		const INJECT = ["sessions", "workspaces", "uiWorkspace", "slots"];
 		const CANVAS_DIR = "/var/www/canvas-library/drawings";
 		const STORE_PREFIX = "dsh-canvas-session:";
 		const TITLE_PREFIX = "画布 · ";
 		const POLL_MS = 300;
 		const READY_TIMEOUT_MS = 60000;
+
+		/* ── Left-rail entry: 画布库 ──────────────────────────────────────────
+		 * The rail icon selects a `main` entry that opens the library beside the
+		 * conversation. It cannot be a frame: the Harness page forbids frames, so
+		 * the library lives in the shipped Browser tab (an Electron webview).
+		 */
+		const PANEL_ID = "excalidraw-canvas";
+		const PANEL_ORDER = 110;
+		const LIBRARY_FALLBACK = "http://127.0.0.1:9112/library/";
+		const INFO_ENDPOINT = "/dsh-excalidraw-canvas/info.json";
+		const OPENED_FLAG = "canvas-library-opened";
+		/** Cached Host answer for the library URL: the desktop port is configurable. */
+		let libraryUrlTask;
+
+		function libraryUrl() {
+			if (libraryUrlTask === undefined) {
+				libraryUrlTask = fetch(INFO_ENDPOINT, { headers: { Accept: "application/json" } })
+					.then((response) => (response.ok ? response.json() : undefined))
+					.then((info) => (typeof info?.url === "string" && info.url !== "" ? info.url : LIBRARY_FALLBACK))
+					.catch(() => LIBRARY_FALLBACK);
+			}
+			return libraryUrlTask;
+		}
+
+		function openLibrary(ctx, url) {
+			const sidebarRight = ctx.get("sidebarRight");
+			if (sidebarRight !== undefined && typeof sidebarRight.openTab === "function") {
+				sidebarRight.openTab("browser", { params: { url } });
+				return;
+			}
+			// A profile without the Browser tab falls back to the system browser.
+			window.open(url, "_blank", "noopener,noreferrer");
+		}
+
+		function CanvasLibraryIcon() {
+			const h = React.createElement;
+			return h("svg", {
+				viewBox: "0 0 24 24", width: 16, height: 16, fill: "none",
+				stroke: "currentColor", strokeWidth: 1.6, strokeLinecap: "round", strokeLinejoin: "round",
+				"aria-hidden": true, focusable: "false", style: { display: "block" },
+			},
+				h("rect", { x: 3.5, y: 3.5, width: 17, height: 17, rx: 3 }),
+				h("path", { d: "M7.4 16.2c2.4-3.9 5.2-5.9 9.2-6.4" }),
+			);
+		}
+
+		const CARD_STYLE = {
+			display: "flex", flexDirection: "column", gap: "14px",
+			maxWidth: "520px", margin: "28px auto", padding: "18px 20px",
+			border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "12px",
+			background: "var(--dsw-alias-bg-layer-1)", color: "var(--dsw-alias-label-primary)",
+		};
+		const BUTTON_STYLE = {
+			padding: "7px 14px", borderRadius: "8px", cursor: "pointer",
+			border: "1px solid var(--dsw-alias-border-l2)",
+			background: "var(--dsw-alias-bg-layer-2)", color: "var(--dsw-alias-label-primary)",
+			font: "inherit", fontSize: "13px",
+		};
+
+		function createCanvasLibraryPanel(ctx) {
+			const h = React.createElement;
+			return function CanvasLibraryPanel() {
+				const [url, setUrl] = React.useState(undefined);
+				React.useEffect(() => {
+					let live = true;
+					libraryUrl().then((resolved) => {
+						if (!live) return;
+						setUrl(resolved);
+						// Selecting the rail entry should land on the page itself, once per
+						// page load: a later click uses the button instead of stacking tabs.
+						if (window.sessionStorage.getItem(OPENED_FLAG) === null) {
+							window.sessionStorage.setItem(OPENED_FLAG, "1");
+							openLibrary(ctx, resolved);
+						}
+					});
+					return () => {
+						live = false;
+					};
+				}, []);
+				const target = url === undefined ? LIBRARY_FALLBACK : url;
+				return h("div", { style: CARD_STYLE },
+					h("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
+						h("span", { style: { color: "var(--dsw-alias-brand-primary)" } }, h(CanvasLibraryIcon)),
+						h("div", { style: { display: "flex", flexDirection: "column", gap: "2px" } },
+							h("span", { style: { fontSize: "15px", fontWeight: 600 } }, "画布库"),
+							h("span", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" } }, "Excalidraw 画布库与编辑器"),
+						),
+					),
+					h("p", { style: { margin: 0, fontSize: "13px", lineHeight: 1.6, color: "var(--dsw-alias-label-secondary)" } },
+						"画布库在右侧打开，和当前会话并排；关掉标签后点下面的按钮可以再开一次。助手的 canvas_* 工具改的就是这里的图纸。",
+					),
+					h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } },
+						h("button", { type: "button", style: BUTTON_STYLE, onClick: () => openLibrary(ctx, target) }, "在右侧打开画布库"),
+						h("a", { href: target, target: "_blank", rel: "noreferrer", style: { fontSize: "12px", color: "var(--dsw-alias-brand-primary)" } }, "用系统浏览器打开"),
+					),
+					h("code", { style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)", wordBreak: "break-all" } }, target),
+				);
+			};
+		}
+
+		function registerCanvasPanel(ctx) {
+			ctx.slots.inject("sidebar.panellist", () => ctx.slots.register({
+				name: "sidebar.panellist", id: PANEL_ID, order: PANEL_ORDER, label: "画布库",
+			}, CanvasLibraryIcon));
+			ctx.slots.inject("main", () => ctx.slots.register({
+				name: "main", key: PANEL_ID,
+			}, createCanvasLibraryPanel(ctx)));
+		}
 
 		function canvasKey() {
 			const raw = new URLSearchParams(window.location.search).get("canvas");
@@ -55,7 +164,11 @@ window.__ModuleLoader__.load({
 
 		function apply(ctx) {
 			const stem = canvasKey();
-			if (stem === undefined) return;
+			if (stem === undefined) {
+				// Standalone Harness page: the rail entry is the way into the library.
+				registerCanvasPanel(ctx);
+				return;
+			}
 			const storeKey = STORE_PREFIX + stem;
 			const title = TITLE_PREFIX + stem;
 			let settled = false;
