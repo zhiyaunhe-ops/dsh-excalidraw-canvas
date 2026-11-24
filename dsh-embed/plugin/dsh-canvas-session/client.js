@@ -65,18 +65,28 @@ window.__ModuleLoader__.load({
 			let opened = false;
 			let off;
 			let giveUp;
+			// `openTab` reports refusals both by throwing and by rejecting: the right
+			// column really has nowhere to put the page, so open it outside instead.
+			const fallback = (error) => {
+				console.warn("[canvas-session] opening the library tab failed:", error);
+				window.open(url, "_blank", "noopener,noreferrer");
+			};
 			const open = () => {
 				if (opened) return;
 				opened = true;
 				window.clearTimeout(giveUp);
 				if (off !== undefined) off();
+				let pending;
 				try {
 					// Pages deduplicate within the target pane, so a second click reveals
 					// the tab instead of stacking copies.
-					sidebarRight.openTab("browser", { params: { url } });
+					pending = sidebarRight.openTab("browser", { params: { url } });
 				} catch (error) {
-					console.warn("[canvas-session] opening the library tab failed:", error);
-					window.open(url, "_blank", "noopener,noreferrer");
+					fallback(error);
+					return;
+				}
+				if (pending !== undefined && pending !== null && typeof pending.then === "function") {
+					pending.catch(fallback);
 				}
 			};
 			const mounted = sidebarRight.mounted;
@@ -167,6 +177,8 @@ window.__ModuleLoader__.load({
 			ctx.slots.inject("main", () => ctx.slots.register({
 				name: "main", key: PANEL_ID,
 			}, createCanvasLibraryPanel(ctx)));
+			// Tell the Host which client bundle is live: the rail entry made it into a page load.
+			void fetch(INFO_ENDPOINT + "?probe=" + Date.now()).catch(() => {});
 		}
 
 		function canvasKey() {

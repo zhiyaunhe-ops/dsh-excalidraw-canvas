@@ -15,9 +15,13 @@ export function apply(ctx, config = {}) {
     scope.effect(() => scope.webServer.register({
       kind: 'exact',
       path: '/dsh-excalidraw-canvas/info.json',
-      resource: async () => new Response(JSON.stringify({ url: `${publicUrl}/library/`, workspaceUrl }), {
-        headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
-      }),
+      resource: async (request) => {
+        const probe = new URL(request.url).searchParams.get('probe');
+        if (probe !== null) console.info(`[canvas-session] client bundle loaded (probe ${probe})`);
+        return new Response(JSON.stringify({ url: `${publicUrl}/library/`, workspaceUrl }), {
+          headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' },
+        });
+      },
     }));
   });
   const decorated = new Map();
