@@ -36,7 +36,7 @@ window.__ModuleLoader__.load({
 		const PANEL_ORDER = 110;
 		const LIBRARY_FALLBACK = "http://127.0.0.1:9112/library/";
 		const INFO_ENDPOINT = "/dsh-excalidraw-canvas/info.json";
-		const OPENED_FLAG = "canvas-library-opened";
+
 		/** Cached Host answer for the library URL: the desktop port is configurable. */
 		let libraryUrlTask;
 
@@ -50,14 +50,49 @@ window.__ModuleLoader__.load({
 			return libraryUrlTask;
 		}
 
+		/**
+		 * Open the library beside the conversation.
+		 * @returns `{ ok: true }`, or the reason no right-side Browser tab opened.
+		 */
 		function openLibrary(ctx, url) {
 			const sidebarRight = ctx.get("sidebarRight");
-			if (sidebarRight !== undefined && typeof sidebarRight.openTab === "function") {
-				sidebarRight.openTab("browser", { params: { url } });
-				return;
+			if (sidebarRight === undefined || typeof sidebarRight.openTab !== "function") {
+				return { ok: false, reason: "这个界面没有右侧浏览器标签（sidebarRight 不可用）" };
 			}
-			// A profile without the Browser tab falls back to the system browser.
-			window.open(url, "_blank", "noopener,noreferrer");
+			// A global panel has no Session surface, and the right column cannot host a
+			// tab without one, so the rail entry hands the main column back first.
+			const layout = ctx.get("layout");
+			if (layout !== undefined && typeof layout.selectPanel === "function") layout.selectPanel(null);
+			let opened = false;
+			let off;
+			let giveUp;
+			const open = () => {
+				if (opened) return;
+				opened = true;
+				window.clearTimeout(giveUp);
+				if (off !== undefined) off();
+				try {
+					// Pages deduplicate within the target pane, so a second click reveals
+					// the tab instead of stacking copies.
+					sidebarRight.openTab("browser", { params: { url } });
+				} catch (error) {
+					console.warn("[canvas-session] opening the library tab failed:", error);
+					window.open(url, "_blank", "noopener,noreferrer");
+				}
+			};
+			const mounted = sidebarRight.mounted;
+			giveUp = window.setTimeout(() => {
+				if (opened) return;
+				open();
+			}, 5000);
+			if (mounted !== undefined && typeof mounted.subscribe === "function" && mounted.getSnapshot() === undefined) {
+				off = mounted.subscribe(() => {
+					if (mounted.getSnapshot() !== undefined) open();
+				});
+			}
+			// The selection change above can mount the surface before the subscription.
+			if (mounted === undefined || mounted.getSnapshot() !== undefined) open();
+			return { ok: true };
 		}
 
 		function CanvasLibraryIcon() {
@@ -88,40 +123,40 @@ window.__ModuleLoader__.load({
 		function createCanvasLibraryPanel(ctx) {
 			const h = React.createElement;
 			return function CanvasLibraryPanel() {
-				const [url, setUrl] = React.useState(undefined);
+				const [phase, setPhase] = React.useState({ kind: "opening" });
 				React.useEffect(() => {
 					let live = true;
-					libraryUrl().then((resolved) => {
+					libraryUrl().then((url) => {
 						if (!live) return;
-						setUrl(resolved);
-						// Selecting the rail entry should land on the page itself, once per
-						// page load: a later click uses the button instead of stacking tabs.
-						if (window.sessionStorage.getItem(OPENED_FLAG) === null) {
-							window.sessionStorage.setItem(OPENED_FLAG, "1");
-							openLibrary(ctx, resolved);
-						}
+						const opened = openLibrary(ctx, url);
+						if (!opened.ok) setPhase({ kind: "manual", url, reason: opened.reason });
 					});
 					return () => {
 						live = false;
 					};
 				}, []);
-				const target = url === undefined ? LIBRARY_FALLBACK : url;
+				// The click already opens the page beside the conversation; this panel
+				// is only the bridge, and stays visible solely when that failed.
+				if (phase.kind === "opening") {
+					return h("div", { style: { padding: "28px", fontSize: "13px", color: "var(--dsw-alias-label-secondary)" } }, "正在打开画布库…");
+				}
+				const retry = () => {
+					const opened = openLibrary(ctx, phase.url);
+					if (!opened.ok) setPhase({ ...phase, reason: opened.reason });
+				};
 				return h("div", { style: CARD_STYLE },
 					h("div", { style: { display: "flex", alignItems: "center", gap: "10px" } },
 						h("span", { style: { color: "var(--dsw-alias-brand-primary)" } }, h(CanvasLibraryIcon)),
-						h("div", { style: { display: "flex", flexDirection: "column", gap: "2px" } },
-							h("span", { style: { fontSize: "15px", fontWeight: 600 } }, "画布库"),
-							h("span", { style: { fontSize: "12px", color: "var(--dsw-alias-label-secondary)" } }, "Excalidraw 画布库与编辑器"),
-						),
+						h("span", { style: { fontSize: "15px", fontWeight: 600 } }, "画布库"),
 					),
 					h("p", { style: { margin: 0, fontSize: "13px", lineHeight: 1.6, color: "var(--dsw-alias-label-secondary)" } },
-						"画布库在右侧打开，和当前会话并排；关掉标签后点下面的按钮可以再开一次。助手的 canvas_* 工具改的就是这里的图纸。",
+						"画布库没能在这里打开：" + phase.reason,
 					),
 					h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } },
-						h("button", { type: "button", style: BUTTON_STYLE, onClick: () => openLibrary(ctx, target) }, "在右侧打开画布库"),
-						h("a", { href: target, target: "_blank", rel: "noreferrer", style: { fontSize: "12px", color: "var(--dsw-alias-brand-primary)" } }, "用系统浏览器打开"),
+						h("button", { type: "button", style: BUTTON_STYLE, onClick: retry }, "重试"),
+						h("a", { href: phase.url, target: "_blank", rel: "noreferrer", style: { fontSize: "12px", color: "var(--dsw-alias-brand-primary)" } }, "用系统浏览器打开"),
 					),
-					h("code", { style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)", wordBreak: "break-all" } }, target),
+					h("code", { style: { fontSize: "11px", color: "var(--dsw-alias-label-secondary)", wordBreak: "break-all" } }, phase.url),
 				);
 			};
 		}
