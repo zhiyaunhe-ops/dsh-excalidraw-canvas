@@ -50,8 +50,15 @@ export async function startDesktop(options = desktopOptions()) {
     }
   }
   try {
+    // A cold start of the canvas server can take tens of seconds: the Electron
+    // binary is ~250 MB and the upstream bundle loads slowly before it binds
+    // (measured 19s cold vs under 1s warm on Windows). Wait on a deadline, not
+    // on a fixed attempt count, so a slow first start is not reported as a
+    // timeout. CANVAS_READY_TIMEOUT_MS overrides the budget for slow machines.
+    const readyTimeout = Number(process.env.CANVAS_READY_TIMEOUT_MS) || 60_000;
+    const started = Date.now();
     let ready = false;
-    for (let attempt = 0; attempt < 100; attempt++) {
+    for (let attempt = 0; !ready && Date.now() - started < readyTimeout; attempt++) {
       // Wait for this child to bind; an occupied port must not be adopted.
       await delay(100);
       if (spawnError) throw spawnError;
@@ -61,9 +68,11 @@ export async function startDesktop(options = desktopOptions()) {
         ready = response.ok && (await response.json()).pid === child.pid;
       }
       catch { /* The new process is still starting. */ }
-      if (ready) break;
+      if (!ready && attempt > 0 && attempt % 50 === 0) {
+        console.info(`[canvas-session] 等待本机画布就绪 ${Math.round((Date.now() - started) / 1000)}s（端口 ${options.canvasPort}）`);
+      }
     }
-    if (!ready) throw new Error('本机画布启动超时');
+    if (!ready) throw new Error(`本机画布启动超时（${Math.round((Date.now() - started) / 1000)}s，端口 ${options.canvasPort}）`);
     const { createWorkspace } = await import('../app/server.mjs');
     const { expandElementsForExport } = await import(pathToFileURL(path.join(upstreamPackage, 'dist/core/expand-elements.js')));
     const { renderScene } = await import(pathToFileURL(path.join(upstreamPackage, 'dist/core/render/index.js')));
